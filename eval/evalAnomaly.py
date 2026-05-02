@@ -145,28 +145,45 @@ def main():
 
     file.write( "\n")
     # TODO: functionalize all the code
-    ood_gts = np.array(ood_gts_list)
-    anomaly_scores = np.array(anomaly_score_logit_list)
 
-    ood_mask = (ood_gts == 1)
-    ind_mask = (ood_gts == 0)
-
-    ood_out = anomaly_scores[ood_mask]
-    ind_out = anomaly_scores[ind_mask]
-
-    ood_label = np.ones(len(ood_out))
-    ind_label = np.zeros(len(ind_out))
+    def eval_score(ood_gts_list, anomaly_score_list):
     
-    val_out = np.concatenate((ind_out, ood_out))
-    val_label = np.concatenate((ind_label, ood_label))
+        ood_gts = np.array(ood_gts_list)
+        anomaly_scores = np.array(anomaly_score_list)
 
-    prc_auc = average_precision_score(val_label, val_out)
-    fpr = fpr_at_95_tpr(val_out, val_label)
+        ood_mask = (ood_gts == 1)
+        ind_mask = (ood_gts == 0)
 
-    print(f'AUPRC score: {prc_auc*100.0}')
-    print(f'FPR@TPR95: {fpr*100.0}')
+        ood_out = anomaly_scores[ood_mask]
+        ind_out = anomaly_scores[ind_mask]
 
-    file.write(('    AUPRC score:' + str(prc_auc*100.0) + '   FPR@TPR95:' + str(fpr*100.0) ))
+        ood_label = np.ones(len(ood_out))
+        ind_label = np.zeros(len(ind_out))
+
+        val_out = np.concatenate((ind_out, ood_out))
+        val_label = np.concatenate((ind_label, ood_label))
+
+        prc_auc = average_precision_score(val_label, val_out)
+        fpr = fpr_at_95_tpr(val_out, val_label)
+
+        return [prc_auc, fpr]
+
+    [prc_auc_logit, fpr_logit] = eval_score(ood_gts_list, anomaly_score_logit_list)
+    [prc_auc_softmax, fpr_softmax] = eval_score(ood_gts_list, anomaly_score_softmax_list)
+    [prc_auc_entropy, fpr_entropy] = eval_score(ood_gts_list, anomaly_score_entropy_list)
+
+    print(f'AUPRC logit score: {prc_auc_logit*100.0}')
+    print(f'FPR@TPR95 logit: {fpr_logit*100.0}')
+
+    print(f'AUPRC softmax score: {prc_auc_softmax*100.0}')
+    print(f'FPR@TPR95 softmax: {fpr_softmax*100.0}')
+
+    print(f'AUPRC entropy score: {prc_auc_entropy*100.0}')
+    print(f'FPR@TPR95 entropy: {fpr_entropy*100.0}')
+
+    file.write(('    AUPRC logit score:' + str(prc_auc_logit*100.0) + '   FPR@TPR95 logit:' + str(fpr_logit*100.0) +
+                '/n    AUPRC softmax score:' + str(prc_auc_softmax*100.0) + '   FPR@TPR95 softmax:' + str(fpr_softmax*100.0) +
+                '/n    AUPRC entropy score:' + str(prc_auc_entropy*100.0) + '   FPR@TPR95 entropy:' + str(fpr_entropy*100.0)))
     file.close()
 
 if __name__ == '__main__':
