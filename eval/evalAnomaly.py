@@ -59,7 +59,9 @@ def main():
     parser.add_argument('--batch-size', type=int, default=1)
     parser.add_argument('--cpu', action='store_true')
     args = parser.parse_args()
-    anomaly_score_list = []
+    anomaly_score_logit_list = []
+    anomaly_score_softmax_list = []
+    anomaly_score_entropy_list = []
     ood_gts_list = []
 
     if not os.path.exists('results.txt'):
@@ -97,10 +99,16 @@ def main():
     for path in glob.glob(os.path.expanduser(str(args.input[0]))):
         print(path)
         images = input_transform((Image.open(path).convert('RGB'))).unsqueeze(0).float().cuda()
-        images = images.permute(0,3,1,2)
+        # images = images.permute(0,3,1,2)
         with torch.no_grad():
             result = model(images)
-        anomaly_result = 1.0 - np.max(result.squeeze(0).data.cpu().numpy(), axis=0)            
+        anomaly_result_logit = 1.0 - np.max(result.squeeze(0).data.cpu().numpy(), axis=0)
+        # TODO: correct the softmax, it is on all the matrx? we don't know
+        anomaly_result_softmax = 1.0 - np.max(torch.softmax(result.squeeze(0).data.cpu().numpy(), dim = 0), axis=0)
+        probs_tensor = torch.softmax(result.squeeze(0), dim=0)
+        # TODO: understand if there is numerical instability and add 1e-9 in the log
+        anomaly_result_entropy = -torch.sum(probs_tensor * torch.log(probs_tensor), dim=0).data.cpu().numpy()
+        print(result)            
         pathGT = path.replace("images", "labels_masks")                
         if "RoadObsticle21" in pathGT:
            pathGT = pathGT.replace("webp", "png")
@@ -129,14 +137,16 @@ def main():
             continue              
         else:
              ood_gts_list.append(ood_gts)
-             anomaly_score_list.append(anomaly_result)
-        del result, anomaly_result, ood_gts, mask
+             anomaly_score_logit_list.append(anomaly_result_logit)
+             anomaly_score_softmax_list.append(anomaly_result_softmax)
+             anomaly_score_entropy_list.append(anomaly_result_entropy)
+        del result, anomaly_result_logit, ood_gts, mask
         torch.cuda.empty_cache()
 
     file.write( "\n")
-
+    # TODO: functionalize all the code
     ood_gts = np.array(ood_gts_list)
-    anomaly_scores = np.array(anomaly_score_list)
+    anomaly_scores = np.array(anomaly_score_logit_list)
 
     ood_mask = (ood_gts == 1)
     ind_mask = (ood_gts == 0)
