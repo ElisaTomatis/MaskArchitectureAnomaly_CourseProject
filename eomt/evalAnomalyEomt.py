@@ -7,7 +7,8 @@ import torch
 import random
 from PIL import Image
 import numpy as np
-from eomt import EoMT
+from models.eomt import EoMT
+from models.vit import ViT
 import os.path as osp
 from argparse import ArgumentParser
 from ood_metrics import fpr_at_95_tpr, calc_metrics, plot_roc, plot_pr,plot_barcode
@@ -16,6 +17,7 @@ from torchvision.transforms import Compose, Resize, ToTensor, Normalize
 from huggingface_hub import hf_hub_download
 from huggingface_hub.utils import RepositoryNotFoundError
 import warnings
+import importlib
 
 seed = 42
 
@@ -31,17 +33,99 @@ torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = True
 
 input_transform = Compose([
-    Resize((1280, 1280), Image.BILINEAR), # EoMT Giant usa solitamente 1280
+    Resize((512, 1024), Image.BILINEAR), # EoMT Giant usa solitamente 1280
     ToTensor(),
     Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]), # Standard ImageNet/DINO
 ])
 
 target_transform = Compose(
     [
-        Resize((1280, 1280), Image.NEAREST),
+        Resize((512, 1024), Image.NEAREST),
     ]
 )
 
+def load_my_state_dict(model, state_dict):
+    own_state = model.state_dict()
+    for name, param in state_dict.items():
+        if name not in own_state:
+            if name.startswith("module."):
+                own_state[name.split("module.")[-1]].copy_(param)
+            else:
+                print(name, " not loaded")
+                continue
+        else:
+            own_state[name].copy_(param)
+    return model
+
+# serve a estrarre lo state_dict da un checkpoint
+def extract_state_dict(checkpoint):
+    if "state_dict" in checkpoint:
+        return checkpoint["state_dict"]
+
+    if "model" in checkpoint:
+        return checkpoint["model"]
+
+    return checkpoint
+
+
+def load_eomt(args, device, config=None):
+    # 1. Prendi il nome del modello
+    name = getattr(args, "eomtName", None)
+
+    if name is None and config is not None:
+        name = (
+            config.get("trainer", {})
+            .get("logger", {})
+            .get("init_args", {})
+            .get("name")
+        )
+
+    if name is None:
+        raise ValueError(
+            "Nome modello EoMT mancante. Passa --eomtName oppure mettilo nel config."
+        )
+
+    print("Loading EoMT weights from Hugging Face:", name)
+
+    encoder = ViT(
+        img_size=(512, 1024),
+        patch_size=14,
+        backbone_name="vit_large_patch14_reg4_dinov2",
+    )
+
+    model = EoMT(
+        encoder=encoder,
+        num_classes=NUM_CLASSES,
+        num_q=100, # cerca fino a 100 oggetti diversi per ogni immagine
+        num_blocks=4, # usiamo gli ultimi 4 blocchi del Transformer
+        masked_attn_enabled=True, # limita l'attenzione delle query solo alle regioni dove è stata inizialmente trovata una maschera
+    ).to(device)
+    
+    # 4. Scarica pesi
+    try:
+        state_dict_path = hf_hub_download(
+            repo_id=f"tue-mps/{name}",
+            filename="pytorch_model.bin",
+        )
+    except RepositoryNotFoundError:
+        raise RepositoryNotFoundError(
+            f"Repository Hugging Face non trovato: tue-mps/{name}"
+        )
+
+    # 5. Carica pesi
+    checkpoint = torch.load(
+        state_dict_path,
+        map_location=device,
+        weights_only=True,
+    )
+    checkpoint = extract_state_dict(checkpoint)
+    model = load_my_state_dict(model, checkpoint)
+
+    model.eval()
+
+    print("EoMT loaded successfully")
+
+    return model
 
 def main():
     parser = ArgumentParser()
@@ -57,44 +141,15 @@ def main():
     parser.add_argument('--subset', default="val")  #can be val or train (must have labels)
     # TODO: understand if it is needed
     parser.add_argument('--datadir', default="/home/shyam/ViT-Adapter/segmentation/data/cityscapes/")
+    parser.add_argument("--eomtName", default="cityscapes_semantic_eomt_large_1024")
     parser.add_argument('--num-workers', type=int, default=4)
     parser.add_argument('--batch-size', type=int, default=1)
     parser.add_argument('--cpu', action='store_true')
     args = parser.parse_args()
     
-    model = EoMT(NUM_CLASSES)
-
-    if (not args.cpu):
-        model = torch.nn.DataParallel(model).cuda()
-
-    config_path = "configs/dinov2/coco/panoptic/eomt_giant_1280.yaml"  # TODO: change to the config file
-    with open(config_path, "r") as f:
-        config = yaml.safe_load(f)
-
-    name = config.get("trainer", {}).get("logger", {}).get("init_args", {}).get("name")
-    
-    if name is None:
-        warnings.warn("No logger name found in the config. Please specify a model name.")
-    else:
-        try:
-            state_dict_path = hf_hub_download(
-                repo_id=f"tue-mps/{name}",
-                filename="pytorch_model.bin",
-            )
- 
-            state_dict = torch.load(
-                state_dict_path, weights_only=True
-            )
-            model.load_state_dict(state_dict, strict=False)
-
-            print ("Model and weights LOADED successfully")
-
-        except RepositoryNotFoundError:
-            warnings.warn(
-                f"Pre-trained model not found for `{name}`. Please load your own checkpoint."
-            )
-
-    model.eval()
+  
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = load_eomt(args, device)
 
     print('cao')
 
@@ -111,11 +166,41 @@ def main():
     for path in glob.glob(os.path.expanduser(str(args.input[0]))):
         print(path)
         images = input_transform((Image.open(path).convert('RGB'))).unsqueeze(0).float().cuda()
-        print(images.shape)
         # images = images.permute(0,3,1,2)
         with torch.no_grad():
             result = model(images)
-        result = result.squeeze(0)
+        
+        mask_logits_per_layer = result[0][-1]
+        class_logits_per_layer = result[1][-1]
+
+        mask_logits = torch.nn.functional.interpolate(
+          mask_logits,
+          size=(512, 1024),
+          mode="bilinear",
+          align_corners=False,
+        )
+
+        # TODO: why sigmoid and not softmax?
+        mask_prob = torch.sigmoid(mask_logits) 
+        class_prob = torch.softmax(class_logits_per_layer, dim=-1)
+
+        # Con prodotto tra matrici standard:
+        B, Q, C = class_prob.shape
+        _, _, H, W = mask_prob.shape
+
+        # 1. Sposta Q alla fine per class_prob -> [B, C, Q]
+        cp = class_prob.transpose(1, 2) 
+
+        # 2. Appiattisce H, W -> [B, Q, H*W]
+        mp = mask_prob.flatten(2) 
+
+        # 3. Prodotto tra matrici -> [B, C, H*W]
+        pixel_probs = torch.matmul(cp, mp) 
+
+        # 4. Ripristina la forma originale -> [B, C, H, W]
+        pixel_probs = pixel_probs.view(B, C, H, W)
+
+        # TODO: Continue from here
         anomaly_result_logit = 1.0 - np.max(result.data.cpu().numpy(), axis=0)
         anomaly_result_softmax = 1.0 - np.max(torch.nn.functional.softmax(result.data.cpu(), dim = 0).numpy(), axis=0)
         probs_tensor = torch.nn.functional.softmax(result, dim=0)
