@@ -95,7 +95,7 @@ def main():
     model = load_my_state_dict(model, torch.load(weightspath, map_location=lambda storage, loc: storage))
     print ("Model and weights LOADED successfully")
     model.eval()
-    
+    print(os.path.expanduser(str(args.input[0])))
     for path in glob.glob(os.path.expanduser(str(args.input[0]))):
         print(path)
         images = input_transform((Image.open(path).convert('RGB'))).unsqueeze(0).float().cuda()
@@ -104,7 +104,7 @@ def main():
             result = model(images)
         result = result.squeeze(0)
         anomaly_result_logit = 1.0 - np.max(result.data.cpu().numpy(), axis=0)
-        probs_tensor = torch.nn.functional.softmax(result, dim=0)
+        probs_tensor = torch.nn.functional.softmax(result.data.cpu(), dim=0)
         anomaly_result_softmax = 1.0 - np.max(probs_tensor.numpy(), axis=0)
         anomaly_result_entropy = -torch.sum(probs_tensor * torch.log(probs_tensor), dim=0).data.cpu().numpy()            
         pathGT = path.replace("images", "labels_masks")                
@@ -118,6 +118,7 @@ def main():
         mask = Image.open(pathGT)
         mask = target_transform(mask)
         ood_gts = np.array(mask)
+
 
         if "RoadAnomaly" in pathGT:
             ood_gts = np.where((ood_gts==2), 1, ood_gts)
@@ -142,8 +143,6 @@ def main():
         torch.cuda.empty_cache()
 
     file.write( "\n")
-    # TODO: functionalize all the code
-
     def eval_score(ood_gts_list, anomaly_score_list):
     
         ood_gts = np.array(ood_gts_list)
