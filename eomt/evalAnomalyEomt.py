@@ -173,39 +173,32 @@ def main():
         mask_logits_per_layer = result[0][-1]
         class_logits_per_layer = result[1][-1]
 
-        mask_logits = torch.nn.functional.interpolate(
-          mask_logits,
+        mask_logits_per_layer = torch.nn.functional.interpolate(
+          mask_logits_per_layer,
           size=(512, 1024),
           mode="bilinear",
           align_corners=False,
         )
 
-        # TODO: why sigmoid and not softmax?
-        mask_prob = torch.sigmoid(mask_logits) 
+        mask_prob = torch.sigmoid(mask_logits_per_layer) 
         class_prob = torch.softmax(class_logits_per_layer, dim=-1)
 
-        # Con prodotto tra matrici standard:
         B, Q, C = class_prob.shape
         _, _, H, W = mask_prob.shape
-
-        # 1. Sposta Q alla fine per class_prob -> [B, C, Q]
         cp = class_prob.transpose(1, 2) 
+        mp = torch.flatten(input = mask_prob,start_dim = 2) 
+        # This operation is performed for each batch
+        pixel_logits = torch.matmul(cp, mp) 
+        pixel_logits = pixel_logits.unflatten(2, (512, 1024))
+        pixel_logits = pixel_logits.squeeze(0)
 
-        # 2. Appiattisce H, W -> [B, Q, H*W]
-        mp = mask_prob.flatten(2) 
-
-        # 3. Prodotto tra matrici -> [B, C, H*W]
-        pixel_probs = torch.matmul(cp, mp) 
-
-        # 4. Ripristina la forma originale -> [B, C, H, W]
-        pixel_probs = pixel_probs.view(B, C, H, W)
-
-        # TODO: Continue from here
-        anomaly_result_logit = 1.0 - np.max(result.data.cpu().numpy(), axis=0)
-        anomaly_result_softmax = 1.0 - np.max(torch.nn.functional.softmax(result.data.cpu(), dim = 0).numpy(), axis=0)
-        probs_tensor = torch.nn.functional.softmax(result, dim=0)
+        anomaly_result_logit = 1.0 - np.max(pixel_logits.data.cpu().numpy(), axis=0)
+        probs_tensor = torch.nn.functional.softmax(pixel_logits.data.cpu(), dim=0)
+        anomaly_result_softmax = 1.0 - np.max(probs_tensor.numpy(), axis=0)
         anomaly_result_entropy = -torch.sum(probs_tensor * torch.log(probs_tensor), dim=0).data.cpu().numpy()            
         pathGT = path.replace("images", "labels_masks")                
+        
+        # TODO: Understand why it doesn't work with roadobsticle and lostandfound
         if "RoadObsticle21" in pathGT:
            pathGT = pathGT.replace("webp", "png")
         if "fs_static" in pathGT:
@@ -219,7 +212,7 @@ def main():
 
         if "RoadAnomaly" in pathGT:
             ood_gts = np.where((ood_gts==2), 1, ood_gts)
-        if "LostAndFound" in pathGT:
+        if "LostFound" in pathGT:
             ood_gts = np.where((ood_gts==0), 255, ood_gts)
             ood_gts = np.where((ood_gts==1), 0, ood_gts)
             ood_gts = np.where((ood_gts>1)&(ood_gts<201), 1, ood_gts)
@@ -240,7 +233,8 @@ def main():
         torch.cuda.empty_cache()
 
     file.write( "\n")
-    # TODO: functionalize all the code
+    print(len(ood_gts_list))
+    print(len(anomaly_score_logit_list))
 
     def eval_score(ood_gts_list, anomaly_score_list):
     
