@@ -196,9 +196,11 @@ def main():
         probs_tensor = torch.nn.functional.softmax(pixel_logits.data.cpu(), dim=0)
         anomaly_result_softmax = 1.0 - np.max(probs_tensor.numpy(), axis=0)
         anomaly_result_entropy = -torch.sum(probs_tensor * torch.log(probs_tensor), dim=0).data.cpu().numpy()            
-        pathGT = path.replace("images", "labels_masks")                
+        pathGT = path.replace("images", "labels_masks")    
+
+        # TODO add rba            
         
-        # TODO: Understand why it doesn't work with roadobsticle and lostandfound
+        # TODO: Understand why it doesn't work with lostandfound 
         if "RoadObsticle21" in pathGT:
            pathGT = pathGT.replace("webp", "png")
         if "fs_static" in pathGT:
@@ -212,7 +214,7 @@ def main():
 
         if "RoadAnomaly" in pathGT:
             ood_gts = np.where((ood_gts==2), 1, ood_gts)
-        if "LostFound" in pathGT:
+        if "LostAndFound" in pathGT:
             ood_gts = np.where((ood_gts==0), 255, ood_gts)
             ood_gts = np.where((ood_gts==1), 0, ood_gts)
             ood_gts = np.where((ood_gts>1)&(ood_gts<201), 1, ood_gts)
