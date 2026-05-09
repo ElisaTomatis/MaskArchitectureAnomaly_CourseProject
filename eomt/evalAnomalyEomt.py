@@ -151,11 +151,10 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = load_eomt(args, device)
 
-    print('cao')
-
     anomaly_score_logit_list = []
     anomaly_score_softmax_list = []
     anomaly_score_entropy_list = []
+    anomaly_score_rba_list = []
     ood_gts_list = []
 
     if not os.path.exists('results.txt'):
@@ -197,8 +196,8 @@ def main():
         anomaly_result_softmax = 1.0 - np.max(probs_tensor.numpy(), axis=0)
         anomaly_result_entropy = -torch.sum(probs_tensor * torch.log(probs_tensor), dim=0).data.cpu().numpy()            
         pathGT = path.replace("images", "labels_masks")    
-
-        # TODO add rba            
+        anomaly_result_rba = - torch.sum( torch.tanh(pixel_logits.data.cpu()), dim = 0) 
+                    
         
         # TODO: Understand why it doesn't work with lostandfound 
         if "RoadObsticle21" in pathGT:
@@ -225,18 +224,17 @@ def main():
             ood_gts = np.where((ood_gts==255), 1, ood_gts)
 
         if 1 not in np.unique(ood_gts):
-            continue              
+            continue           
         else:
              ood_gts_list.append(ood_gts)
              anomaly_score_logit_list.append(anomaly_result_logit)
              anomaly_score_softmax_list.append(anomaly_result_softmax)
              anomaly_score_entropy_list.append(anomaly_result_entropy)
+             anomaly_score_rba_list.append(anomaly_result_rba)
         del result, anomaly_result_logit, ood_gts, mask
         torch.cuda.empty_cache()
 
     file.write( "\n")
-    print(len(ood_gts_list))
-    print(len(anomaly_score_logit_list))
 
     def eval_score(ood_gts_list, anomaly_score_list):
     
@@ -263,6 +261,7 @@ def main():
     [prc_auc_logit, fpr_logit] = eval_score(ood_gts_list, anomaly_score_logit_list)
     [prc_auc_softmax, fpr_softmax] = eval_score(ood_gts_list, anomaly_score_softmax_list)
     [prc_auc_entropy, fpr_entropy] = eval_score(ood_gts_list, anomaly_score_entropy_list)
+    [prc_auc_rba, fpr_rba] = eval_score(ood_gts_list, anomaly_score_rba_list)
 
     print(f'AUPRC logit score: {prc_auc_logit*100.0}')
     print(f'FPR@TPR95 logit: {fpr_logit*100.0}')
@@ -273,9 +272,16 @@ def main():
     print(f'AUPRC entropy score: {prc_auc_entropy*100.0}')
     print(f'FPR@TPR95 entropy: {fpr_entropy*100.0}')
 
+    print(f'AUPRC rba score: {prc_auc_rba*100.0}')
+    print(f'FPR@TPR95 rba: {fpr_rba*100.0}')
+
+
     file.write(('    AUPRC logit score:' + str(prc_auc_logit*100.0) + '   FPR@TPR95 logit:' + str(fpr_logit*100.0) +
                 '\n    AUPRC softmax score:' + str(prc_auc_softmax*100.0) + '   FPR@TPR95 softmax:' + str(fpr_softmax*100.0) +
-                '\n    AUPRC entropy score:' + str(prc_auc_entropy*100.0) + '   FPR@TPR95 entropy:' + str(fpr_entropy*100.0)))
+                '\n    AUPRC entropy score:' + str(prc_auc_entropy*100.0) + '   FPR@TPR95 entropy:' + str(fpr_entropy*100.0) +
+                '\n    AUPRC rba score:' + str(prc_auc_rba*100.0) + '   FPR@TPR95 rba:' + str(fpr_rba*100.0)
+                ))
+
     file.close()
 
 if __name__ == '__main__':
