@@ -12,6 +12,7 @@ from argparse import ArgumentParser
 from ood_metrics import fpr_at_95_tpr, calc_metrics, plot_roc, plot_pr,plot_barcode
 from sklearn.metrics import roc_auc_score, roc_curve, auc, precision_recall_curve, average_precision_score
 from torchvision.transforms import Compose, Resize, ToTensor, Normalize
+from iouEval import iouEval
 
 seed = 42
 
@@ -95,7 +96,7 @@ def main():
     model = load_my_state_dict(model, torch.load(weightspath, map_location=lambda storage, loc: storage))
     print ("Model and weights LOADED successfully")
     model.eval()
-    print(os.path.expanduser(str(args.input[0])))
+    t_vec = np.concatenate(np.array((0.5,0.75,1.1)), np.exp(np.linspace(np.log(0.1), np.log(50), 20)))    
     for path in glob.glob(os.path.expanduser(str(args.input[0]))):
         print(path)
         images = input_transform((Image.open(path).convert('RGB'))).unsqueeze(0).float().cuda()
@@ -103,10 +104,13 @@ def main():
         with torch.no_grad():
             result = model(images)
         result = result.squeeze(0)
-        anomaly_result_logit = 1.0 - np.max(result.data.cpu().numpy(), axis=0)
-        probs_tensor = torch.nn.functional.softmax(result.data.cpu(), dim=0)  
-        anomaly_result_softmax = 1.0 - np.max(probs_tensor.numpy(), axis=0)
-        anomaly_result_entropy = -torch.sum(probs_tensor * torch.log(probs_tensor), dim=0).data.cpu().numpy()            
+        
+        anomaly_result_list = []
+        for t in t_vec:
+            probs_tensor = torch.nn.functional.softmax(result.data.cpu() / t, dim=0)  
+            anomaly_result_softmax = 1.0 - np.max(probs_tensor.numpy(), axis=0)
+            anomaly_result_list.append(anomaly_result_softmax)
+
         pathGT = path.replace("images", "labels_masks")                
         if "RoadObsticle21" in pathGT:
            pathGT = pathGT.replace("webp", "png")
@@ -118,7 +122,6 @@ def main():
         mask = Image.open(pathGT)
         mask = target_transform(mask)
         ood_gts = np.array(mask)
-
 
         if "RoadAnomaly" in pathGT:
             ood_gts = np.where((ood_gts==2), 1, ood_gts)
@@ -136,10 +139,8 @@ def main():
             continue              
         else:
              ood_gts_list.append(ood_gts)
-             anomaly_score_logit_list.append(anomaly_result_logit)
-             anomaly_score_softmax_list.append(anomaly_result_softmax)
-             anomaly_score_entropy_list.append(anomaly_result_entropy)
-        del result, anomaly_result_logit, anomaly_result_softmax, anomaly_result_entropy, ood_gts, mask
+             anomaly_score_softmax_list.append(anomaly_result_list)
+        del result, ood_gts, anomaly_result_list, mask
         torch.cuda.empty_cache()
 
     file.write( "\n")
@@ -165,22 +166,13 @@ def main():
 
         return [prc_auc, fpr]
 
-    [prc_auc_logit, fpr_logit] = eval_score(ood_gts_list, anomaly_score_logit_list)
-    [prc_auc_softmax, fpr_softmax] = eval_score(ood_gts_list, anomaly_score_softmax_list)
-    [prc_auc_entropy, fpr_entropy] = eval_score(ood_gts_list, anomaly_score_entropy_list)
-
-    print(f'AUPRC logit score: {prc_auc_logit*100.0}')
-    print(f'FPR@TPR95 logit: {fpr_logit*100.0}')
-
-    print(f'AUPRC softmax score: {prc_auc_softmax*100.0}')
-    print(f'FPR@TPR95 softmax: {fpr_softmax*100.0}')
-
-    print(f'AUPRC entropy score: {prc_auc_entropy*100.0}')
-    print(f'FPR@TPR95 entropy: {fpr_entropy*100.0}')
-
-    file.write(('    AUPRC logit score:' + str(prc_auc_logit*100.0) + '   FPR@TPR95 logit:' + str(fpr_logit*100.0) +
-                '\n    AUPRC softmax score:' + str(prc_auc_softmax*100.0) + '   FPR@TPR95 softmax:' + str(fpr_softmax*100.0) +
-                '\n    AUPRC entropy score:' + str(prc_auc_entropy*100.0) + '   FPR@TPR95 entropy:' + str(fpr_entropy*100.0)))
+    scores_array = np.array(anomaly_score_softmax_list)
+    for i,t in enumerate(t_vec):
+        [prc_auc_softmax, fpr_softmax] = eval_score(ood_gts_list, scores_array[:, i])
+        print(f't = {t}')
+        print(f'AUPRC softmax score: {prc_auc_softmax*100.0}')
+        print(f'FPR@TPR95 softmax: {fpr_softmax*100.0}')
+        file.write(f'\n  t = {t} -->  ' + 'AUPRC softmax score:' + str(prc_auc_softmax*100.0) + '   FPR@TPR95 softmax:' + str(fpr_softmax*100.0))
     file.close()
 
 if __name__ == '__main__':
