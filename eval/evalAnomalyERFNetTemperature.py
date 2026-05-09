@@ -96,7 +96,7 @@ def main():
     model = load_my_state_dict(model, torch.load(weightspath, map_location=lambda storage, loc: storage))
     print ("Model and weights LOADED successfully")
     model.eval()
-    t_vec = np.concatenate(np.array((0.5,0.75,1.1)), np.exp(np.linspace(np.log(0.1), np.log(50), 20)))    
+    t_vec = np.concatenate((np.array((0.5,0.75,1.1)), np.exp(np.linspace(np.log(0.1), np.log(50), 20))))    
     for path in glob.glob(os.path.expanduser(str(args.input[0]))):
         print(path)
         images = input_transform((Image.open(path).convert('RGB'))).unsqueeze(0).float().cuda()
@@ -167,12 +167,24 @@ def main():
         return [prc_auc, fpr]
 
     scores_array = np.array(anomaly_score_softmax_list)
+    auprc_list = []
+    fpr_list = []
     for i,t in enumerate(t_vec):
         [prc_auc_softmax, fpr_softmax] = eval_score(ood_gts_list, scores_array[:, i])
         print(f't = {t}')
         print(f'AUPRC softmax score: {prc_auc_softmax*100.0}')
         print(f'FPR@TPR95 softmax: {fpr_softmax*100.0}')
-        file.write(f'\n  t = {t} -->  ' + 'AUPRC softmax score:' + str(prc_auc_softmax*100.0) + '   FPR@TPR95 softmax:' + str(fpr_softmax*100.0))
+        auprc_list.append(prc_auc_softmax)
+        fpr_list.append(fpr_softmax)
+
+        if i <= 2:
+            file.write(f'\n  t = {t} -->  ' + 'AUPRC softmax score:' + str(prc_auc_softmax*100.0) + '   FPR@TPR95 softmax:' + str(fpr_softmax*100.0))
+    performance_array = np.array(auprc_list) - np.array(fpr_list) + 1.0
+    best_index = np.argmax(performance_array)
+    best_t = t_vec[best_index]
+    best_auprc = auprc_list[best_index]
+    best_fpr = fpr_list[best_index]
+    
     file.close()
 
 if __name__ == '__main__':
