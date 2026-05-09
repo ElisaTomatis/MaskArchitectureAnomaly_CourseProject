@@ -184,6 +184,7 @@ def main():
     best_t = t_vec[best_index]
     best_auprc = auprc_list[best_index]
     best_fpr = fpr_list[best_index]
+    file.write(f'\n best t = {best_t} -->  ' + 'AUPRC softmax score:' + str(best_auprc*100.0) + '   FPR@TPR95 softmax:' + str(best_fpr*100.0))
     
     file.close()
 
