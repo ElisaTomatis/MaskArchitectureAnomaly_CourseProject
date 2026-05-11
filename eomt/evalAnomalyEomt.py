@@ -35,7 +35,7 @@ torch.backends.cudnn.benchmark = True
 input_transform = Compose([
     Resize((512, 1024), Image.BILINEAR), # EoMT Giant usa solitamente 1280
     ToTensor(),
-    Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]), # Standard ImageNet/DINO
+    # Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]), # Standard ImageNet/DINO
 ])
 
 target_transform = Compose(
@@ -231,7 +231,7 @@ def main():
              anomaly_score_softmax_list.append(anomaly_result_softmax)
              anomaly_score_entropy_list.append(anomaly_result_entropy)
              anomaly_score_rba_list.append(anomaly_result_rba)
-        del result, anomaly_result_logit, ood_gts, mask
+        del result, anomaly_result_logit, anomaly_result_softmax, anomaly_result_entropy ,ood_gts, mask
         torch.cuda.empty_cache()
 
     file.write( "\n")
