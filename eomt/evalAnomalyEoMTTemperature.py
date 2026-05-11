@@ -222,7 +222,7 @@ def main():
             continue           
         else:
              ood_gts_list.append(ood_gts)
-             anomaly_score_softmax_list.append(anomaly_result_softmax)
+             anomaly_score_softmax_list.append(anomaly_result_list)
         del result, anomaly_result_softmax, ood_gts, mask
         torch.cuda.empty_cache()
 
@@ -249,7 +249,6 @@ def main():
         fpr = fpr_at_95_tpr(val_out, val_label)
 
         return [prc_auc, fpr]
-
     scores_array = np.array(anomaly_score_softmax_list)
     auprc_list = []
     fpr_list = []
