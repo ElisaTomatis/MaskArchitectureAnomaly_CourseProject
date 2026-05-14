@@ -27,24 +27,34 @@ np.random.seed(seed)
 torch.manual_seed(seed)
 
 NUM_CHANNELS = 3
+# In Cityscapes there are 19 standard classes and one more that is the OOD class
 NUM_CLASSES = 20
-# gpu training specific
+# gpu training specific, for results' reproducibility
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = True
 
 input_transform = Compose([
-    Resize((512, 1024), Image.BILINEAR), # EoMT Giant usa solitamente 1280
+    Resize((512, 1024), Image.BILINEAR), 
     ToTensor(),
-    # Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]), # Standard ImageNet/DINO
+    Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]), # Standard ImageNet/DINO
 ])
 
-target_transform = Compose(
-    [
+target_transform = Compose([
         Resize((512, 1024), Image.NEAREST),
-    ]
-)
+    ])
 
 def load_my_state_dict(model, state_dict):
+    """
+    Manually loads checkpoint weights into the model.
+    
+    model : torch.nn.Module
+        Target PyTorch model.
+
+    state_dict : dict
+        Dictionary containing the checkpoint parameters.
+
+    Returns: torch.nn.Module, which is the model with loaded weights.
+    """
     own_state = model.state_dict()
     for name, param in state_dict.items():
         if name not in own_state:
@@ -57,8 +67,16 @@ def load_my_state_dict(model, state_dict):
             own_state[name].copy_(param)
     return model
 
-# serve a estrarre lo state_dict da un checkpoint
+
 def extract_state_dict(checkpoint):
+    """
+    Extracts the model state dictionary from a checkpoint, 
+    not considering all other infos, such as optimizer, 
+    epoch, lr_scheduler, etc...
+
+    Returns: dict, extracted model state dictionary, which has 
+             layers' name as keys and tensors of weights as values
+    """
     if "state_dict" in checkpoint:
         return checkpoint["state_dict"]
 
@@ -69,8 +87,23 @@ def extract_state_dict(checkpoint):
 
 
 def load_eomt(args, device, config=None):
-    # 1. Prendi il nome del modello
-    name = getattr(args, "eomtName", None)
+    """
+    Loads a pretrained EoMT model from Hugging Face.
+
+    The function retrieves the model name either from command-line
+    arguments or from the configuration file, builds the ViT-based
+    EoMT architecture, downloads the pretrained weights, and loads
+    them into the model.
+
+    args : argparse.Namespace
+    device : torch.device
+    config : dict, optional
+        Configuration dictionary used as fallback for retrieving
+        the model name.
+
+    Returns: torch.nn.Module, which is the pretrained EoMT model in evaluation mode.
+    """
+    name = getattr(args, "eomtName", None) # which is cityscapes_semantic_eomt_large_1024
 
     if name is None and config is not None:
         name = (
@@ -96,12 +129,12 @@ def load_eomt(args, device, config=None):
     model = EoMT(
         encoder=encoder,
         num_classes=NUM_CLASSES,
-        num_q=100, # cerca fino a 100 oggetti diversi per ogni immagine
-        num_blocks=4, # usiamo gli ultimi 4 blocchi del Transformer
-        masked_attn_enabled=True, # limita l'attenzione delle query solo alle regioni dove è stata inizialmente trovata una maschera
+        num_q=100, 
+        num_blocks=4, # 4 layers transformer
+        masked_attn_enabled=True, # attention limited to the most relevant regions
     ).to(device)
     
-    # 4. Scarica pesi
+    # Downloads weights from hugging face if the state dict path exists
     try:
         state_dict_path = hf_hub_download(
             repo_id=f"tue-mps/{name}",
@@ -112,14 +145,14 @@ def load_eomt(args, device, config=None):
             f"Repository Hugging Face non trovato: tue-mps/{name}"
         )
 
-    # 5. Carica pesi
+    # Loads the file in memory
     checkpoint = torch.load(
         state_dict_path,
         map_location=device,
         weights_only=True,
     )
-    checkpoint = extract_state_dict(checkpoint)
-    model = load_my_state_dict(model, checkpoint)
+    checkpoint = extract_state_dict(checkpoint) # Extract the state_dict of layers and weights
+    model = load_my_state_dict(model, checkpoint) # Match between layer names of the model and weights saved
 
     model.eval()
 
@@ -131,20 +164,19 @@ def main():
     parser = ArgumentParser()
     parser.add_argument(
         "--input",
-        default="/home/shyam/Mask2Former/unk-eval/RoadObsticle21/images/*.webp",
+        default="/home/shyam/Mask2Former/unk-eval/RoadObstacle21/images/*.webp",
         nargs="+",
         help="A list of space separated input images; "
         "or a single glob pattern such as 'directory/*.jpg'",
     )  
     parser.add_argument('--loadDir',default="../models/")
     parser.add_argument('--loadModel', default="eomt.py")
-    parser.add_argument('--subset', default="val")  #can be val or train (must have labels)
-    # TODO: understand if it is needed
+    parser.add_argument('--subset', default="val")  # can be val or train (must have labels)
     parser.add_argument('--datadir', default="/home/shyam/ViT-Adapter/segmentation/data/cityscapes/")
     parser.add_argument("--eomtName", default="cityscapes_semantic_eomt_large_1024")
     parser.add_argument('--num-workers', type=int, default=4)
     parser.add_argument('--batch-size', type=int, default=1)
-    parser.add_argument('--cpu', action='store_true')
+    # parser.add_argument('--cpu', action='store_true')
     args = parser.parse_args()
     
   
@@ -159,48 +191,49 @@ def main():
 
     if not os.path.exists('results.txt'):
         open('results.txt', 'w').close()
-    file = open('results.txt', 'w')
+    file = open('results.txt', 'a')
 
     
     for path in glob.glob(os.path.expanduser(str(args.input[0]))):
         print(path)
-        images = input_transform((Image.open(path).convert('RGB'))).unsqueeze(0).float().cuda()
-        # images = images.permute(0,3,1,2)
+        images = input_transform((Image.open(path).convert('RGB'))).unsqueeze(0).float().to(device)
         with torch.no_grad():
             result = model(images)
         
-        mask_logits_per_layer = result[0][-1]
-        class_logits_per_layer = result[1][-1]
+        mask_logits_last_layer = result[0][-1] # Just the last layer's mask of the transformer
+        class_logits_last_layer = result[1][-1]
 
-        mask_logits_per_layer = torch.nn.functional.interpolate(
-          mask_logits_per_layer,
+        # Expands the output mask dimensions of the model to match the ground truth's
+        mask_logits_last_layer = torch.nn.functional.interpolate(
+          mask_logits_last_layer,
           size=(512, 1024),
           mode="bilinear",
           align_corners=False,
         )
 
-        mask_prob = torch.sigmoid(mask_logits_per_layer) 
-        class_prob = torch.softmax(class_logits_per_layer, dim=-1)
+        # Output of the model
+        mask_prob = torch.sigmoid(mask_logits_last_layer) 
+        class_prob = torch.softmax(class_logits_last_layer, dim=-1)
 
         B, Q, C = class_prob.shape
         _, _, H, W = mask_prob.shape
-        cp = class_prob.transpose(1, 2) 
-        mp = torch.flatten(input = mask_prob,start_dim = 2) 
+        cp = class_prob.transpose(1, 2) # (B, C, Q)
+        mp = torch.flatten(input = mask_prob,start_dim = 2) # (B, Q, H*W)
         # This operation is performed for each batch
-        pixel_logits = torch.matmul(cp, mp) 
-        pixel_logits = pixel_logits.unflatten(2, (512, 1024))
-        pixel_logits = pixel_logits.squeeze(0)
+        pixel_logits = torch.matmul(cp, mp) # (B, C, H*W)
+        pixel_logits = pixel_logits.unflatten(2, (H, W)) # (B, C, H, W)
+        # Per ogni pixel, score per classe
+        pixel_logits = pixel_logits.squeeze(0) # (C, H, W)
 
-        anomaly_result_logit = 1.0 - np.max(pixel_logits.data.cpu().numpy(), axis=0)
-        probs_tensor = torch.nn.functional.softmax(pixel_logits.data.cpu(), dim=0)
+        anomaly_result_logit = 1.0 - np.max(pixel_logits.data.to(device).numpy(), axis=0)
+        probs_tensor = torch.nn.functional.softmax(pixel_logits.data.to(device), dim=0)
         anomaly_result_softmax = 1.0 - np.max(probs_tensor.numpy(), axis=0)
-        anomaly_result_entropy = -torch.sum(probs_tensor * torch.log(probs_tensor), dim=0).data.cpu().numpy()            
+        anomaly_result_entropy = -torch.sum(probs_tensor * torch.log(probs_tensor), dim=0).data.to(device).numpy()            
         pathGT = path.replace("images", "labels_masks")    
-        anomaly_result_rba = - torch.sum( torch.tanh(pixel_logits.data.cpu()), dim = 0) 
+        anomaly_result_rba = - torch.sum( torch.tanh(pixel_logits.data.to(device)), dim = 0) 
                     
         
-        # TODO: Understand why it doesn't work with lostandfound 
-        if "RoadObsticle21" in pathGT:
+        if "RoadObstacle21" in pathGT:
            pathGT = pathGT.replace("webp", "png")
         if "fs_static" in pathGT:
            pathGT = pathGT.replace("jpg", "png")                
@@ -209,6 +242,7 @@ def main():
 
         mask = Image.open(pathGT)
         mask = target_transform(mask)
+        # ground truth mask
         ood_gts = np.array(mask)
 
         if "RoadAnomaly" in pathGT:
@@ -223,6 +257,7 @@ def main():
             ood_gts = np.where((ood_gts<20), 0, ood_gts)
             ood_gts = np.where((ood_gts==255), 1, ood_gts)
 
+        # Discard images without anomalies
         if 1 not in np.unique(ood_gts):
             continue           
         else:
@@ -232,7 +267,7 @@ def main():
              anomaly_score_entropy_list.append(anomaly_result_entropy)
              anomaly_score_rba_list.append(anomaly_result_rba)
         del result, anomaly_result_logit, anomaly_result_softmax, anomaly_result_entropy ,ood_gts, mask
-        torch.cuda.empty_cache()
+        torch.device.empty_cache()
 
     file.write( "\n")
 
