@@ -27,24 +27,33 @@ np.random.seed(seed)
 torch.manual_seed(seed)
 
 NUM_CHANNELS = 3
+# In Cityscapes there are 19 standard classes and one more that is the OOD class
 NUM_CLASSES = 20
-# gpu training specific
+# gpu training specific, for results' reproducibility
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = True
 
 input_transform = Compose([
-    Resize((512, 1024), Image.BILINEAR), # EoMT Giant usa solitamente 1280
+    Resize((1024, 1024), Image.BILINEAR), 
     ToTensor(),
-    # Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]), # Standard ImageNet/DINO
 ])
 
-target_transform = Compose(
-    [
+target_transform = Compose([
         Resize((512, 1024), Image.NEAREST),
-    ]
-)
+    ])
 
 def load_my_state_dict(model, state_dict):
+    """
+    Manually loads checkpoint weights into the model.
+    
+    model : torch.nn.Module
+        Target PyTorch model.
+
+    state_dict : dict
+        Dictionary containing the checkpoint parameters.
+
+    Returns: torch.nn.Module, which is the model with loaded weights.
+    """
     own_state = model.state_dict()
     for name, param in state_dict.items():
         if name not in own_state:
@@ -57,8 +66,16 @@ def load_my_state_dict(model, state_dict):
             own_state[name].copy_(param)
     return model
 
-# serve a estrarre lo state_dict da un checkpoint
+
 def extract_state_dict(checkpoint):
+    """
+    Extracts the model state dictionary from a checkpoint, 
+    not considering all other infos, such as optimizer, 
+    epoch, lr_scheduler, etc...
+
+    Returns: dict, extracted model state dictionary, which has 
+             layers' name as keys and tensors of weights as values
+    """
     if "state_dict" in checkpoint:
         return checkpoint["state_dict"]
 
@@ -69,8 +86,23 @@ def extract_state_dict(checkpoint):
 
 
 def load_eomt(args, device, config=None):
-    # 1. Prendi il nome del modello
-    name = getattr(args, "eomtName", None)
+    """
+    Loads a pretrained EoMT model from Hugging Face.
+
+    The function retrieves the model name either from command-line
+    arguments or from the configuration file, builds the ViT-based
+    EoMT architecture, downloads the pretrained weights, and loads
+    them into the model.
+
+    args : argparse.Namespace
+    device : torch.device
+    config : dict, optional
+        Configuration dictionary used as fallback for retrieving
+        the model name.
+
+    Returns: torch.nn.Module, which is the pretrained EoMT model in evaluation mode.
+    """
+    name = getattr(args, "eomtName", None) # which is cityscapes_semantic_eomt_large_1024
 
     if name is None and config is not None:
         name = (
@@ -88,7 +120,7 @@ def load_eomt(args, device, config=None):
     print("Loading EoMT weights from Hugging Face:", name)
 
     encoder = ViT(
-        img_size=(512, 1024),
+        img_size=(1024, 1024),
         patch_size=14,
         backbone_name="vit_large_patch14_reg4_dinov2",
     )
@@ -96,27 +128,16 @@ def load_eomt(args, device, config=None):
     model = EoMT(
         encoder=encoder,
         num_classes=NUM_CLASSES,
-        num_q=100, # cerca fino a 100 oggetti diversi per ogni immagine
-        num_blocks=4, # usiamo gli ultimi 4 blocchi del Transformer
-        masked_attn_enabled=True, # limita l'attenzione delle query solo alle regioni dove è stata inizialmente trovata una maschera
+        num_q=100, 
+        num_blocks=3, # 3 layers transformer
+        masked_attn_enabled=True, # attention limited to the most relevant regions
     ).to(device)
     
-    # 4. Scarica pesi
-    try:
-        state_dict_path = hf_hub_download(
-            repo_id=f"tue-mps/{name}",
-            filename="pytorch_model.bin",
-        )
-    except RepositoryNotFoundError:
-        raise RepositoryNotFoundError(
-            f"Repository Hugging Face non trovato: tue-mps/{name}"
-        )
+    state_dict_path = "/content/drive/MyDrive/Colab Notebooks/eomt_cityscapes.bin"
 
-    # 5. Carica pesi
     checkpoint = torch.load(
         state_dict_path,
         map_location=device,
-        weights_only=True,
     )
     checkpoint = extract_state_dict(checkpoint)
     model = load_my_state_dict(model, checkpoint)
@@ -162,7 +183,6 @@ def main():
     for path in glob.glob(os.path.expanduser(str(args.input[0]))):
         print(path)
         images = input_transform((Image.open(path).convert('RGB'))).unsqueeze(0).float().cuda()
-        # images = images.permute(0,3,1,2)
         with torch.no_grad():
             result = model(images)
         
@@ -171,7 +191,7 @@ def main():
 
         mask_logits_per_layer = torch.nn.functional.interpolate(
           mask_logits_per_layer,
-          size=(512, 1024),
+          size=(1024, 1024),
           mode="bilinear",
           align_corners=False,
         )

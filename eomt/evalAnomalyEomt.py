@@ -34,9 +34,8 @@ torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = True
 
 input_transform = Compose([
-    Resize((512, 1024), Image.BILINEAR), 
-    ToTensor(),
-    Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]), # Standard ImageNet/DINO
+    Resize((1024, 1024), Image.BILINEAR), 
+    ToTensor()
 ])
 
 target_transform = Compose([
@@ -121,7 +120,7 @@ def load_eomt(args, device, config=None):
     print("Loading EoMT weights from Hugging Face:", name)
 
     encoder = ViT(
-        img_size=(512, 1024),
+        img_size=(1024, 1024),
         patch_size=14,
         backbone_name="vit_large_patch14_reg4_dinov2",
     )
@@ -130,29 +129,18 @@ def load_eomt(args, device, config=None):
         encoder=encoder,
         num_classes=NUM_CLASSES,
         num_q=100, 
-        num_blocks=4, # 4 layers transformer
+        num_blocks=3, # 3 layers transformer
         masked_attn_enabled=True, # attention limited to the most relevant regions
     ).to(device)
     
-    # Downloads weights from hugging face if the state dict path exists
-    try:
-        state_dict_path = hf_hub_download(
-            repo_id=f"tue-mps/{name}",
-            filename="pytorch_model.bin",
-        )
-    except RepositoryNotFoundError:
-        raise RepositoryNotFoundError(
-            f"Repository Hugging Face non trovato: tue-mps/{name}"
-        )
+    state_dict_path = "/content/drive/MyDrive/Colab Notebooks/eomt_cityscapes.bin"
 
-    # Loads the file in memory
     checkpoint = torch.load(
         state_dict_path,
         map_location=device,
-        weights_only=True,
     )
-    checkpoint = extract_state_dict(checkpoint) # Extract the state_dict of layers and weights
-    model = load_my_state_dict(model, checkpoint) # Match between layer names of the model and weights saved
+    checkpoint = extract_state_dict(checkpoint)
+    model = load_my_state_dict(model, checkpoint)
 
     model.eval()
 
@@ -206,7 +194,7 @@ def main():
         # Expands the output mask dimensions of the model to match the ground truth's
         mask_logits_last_layer = torch.nn.functional.interpolate(
           mask_logits_last_layer,
-          size=(512, 1024),
+          size=(1024, 1024),
           mode="bilinear",
           align_corners=False,
         )
