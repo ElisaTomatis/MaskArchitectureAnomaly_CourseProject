@@ -108,7 +108,7 @@ def main():
         anomaly_result_softmax = 1.0 - np.max(probs_tensor.numpy(), axis=0)
         anomaly_result_entropy = -torch.sum(probs_tensor * torch.log(probs_tensor), dim=0).data.cpu().numpy()            
         pathGT = path.replace("images", "labels_masks")                
-        if "RoadObsticle21" in pathGT:
+        if "RoadObstacle21" in pathGT:
            pathGT = pathGT.replace("webp", "png")
         if "fs_static" in pathGT:
            pathGT = pathGT.replace("jpg", "png")                

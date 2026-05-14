@@ -39,7 +39,7 @@ input_transform = Compose([
 ])
 
 target_transform = Compose([
-        Resize((512, 1024), Image.NEAREST),
+        Resize((1024, 1024), Image.NEAREST),
     ])
 
 def load_my_state_dict(model, state_dict):
@@ -213,12 +213,12 @@ def main():
         # Per ogni pixel, score per classe
         pixel_logits = pixel_logits.squeeze(0) # (C, H, W)
 
-        anomaly_result_logit = 1.0 - np.max(pixel_logits.data.to(device).numpy(), axis=0)
-        probs_tensor = torch.nn.functional.softmax(pixel_logits.data.to(device), dim=0)
+        anomaly_result_logit = 1.0 - np.max(pixel_logits.data.cpu().numpy(), axis=0)
+        probs_tensor = torch.nn.functional.softmax(pixel_logits.data.cpu(), dim=0)
         anomaly_result_softmax = 1.0 - np.max(probs_tensor.numpy(), axis=0)
-        anomaly_result_entropy = -torch.sum(probs_tensor * torch.log(probs_tensor), dim=0).data.to(device).numpy()            
+        anomaly_result_entropy = -torch.sum(probs_tensor * torch.log(probs_tensor), dim=0).data.cpu().numpy()            
         pathGT = path.replace("images", "labels_masks")    
-        anomaly_result_rba = - torch.sum( torch.tanh(pixel_logits.data.to(device)), dim = 0) 
+        anomaly_result_rba = - torch.sum( torch.tanh(pixel_logits.data.cpu()), dim = 0) 
                     
         
         if "RoadObstacle21" in pathGT:
@@ -255,7 +255,7 @@ def main():
              anomaly_score_entropy_list.append(anomaly_result_entropy)
              anomaly_score_rba_list.append(anomaly_result_rba)
         del result, anomaly_result_logit, anomaly_result_softmax, anomaly_result_entropy ,ood_gts, mask
-        torch.device.empty_cache()
+        # torch.device.empty_cache()
 
     file.write( "\n")
 
