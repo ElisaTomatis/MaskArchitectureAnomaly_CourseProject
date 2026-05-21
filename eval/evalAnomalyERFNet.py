@@ -7,11 +7,10 @@ import random
 from PIL import Image
 import numpy as np
 from erfnet import ERFNet
-import os.path as osp
+import os.path
 from argparse import ArgumentParser
-from ood_metrics import fpr_at_95_tpr, calc_metrics, plot_roc, plot_pr,plot_barcode
-from sklearn.metrics import roc_auc_score, roc_curve, auc, precision_recall_curve, average_precision_score
 from torchvision.transforms import Compose, Resize, ToTensor, Normalize
+from functions import *
 
 seed = 42
 
@@ -59,6 +58,7 @@ def main():
     parser.add_argument('--batch-size', type=int, default=1)
     parser.add_argument('--cpu', action='store_true')
     args = parser.parse_args()
+    
     anomaly_score_logit_list = []
     anomaly_score_softmax_list = []
     anomaly_score_entropy_list = []
@@ -70,67 +70,31 @@ def main():
 
     modelpath = args.loadDir + args.loadModel
     weightspath = args.loadDir + args.loadWeights
-
     print ("Loading model: " + modelpath)
     print ("Loading weights: " + weightspath)
-
     model = ERFNet(NUM_CLASSES)
-
     if (not args.cpu):
         model = torch.nn.DataParallel(model).cuda()
-
-    def load_my_state_dict(model, state_dict):  #custom function to load model when not all dict elements
-        own_state = model.state_dict()
-        for name, param in state_dict.items():
-            if name not in own_state:
-                if name.startswith("module."):
-                    own_state[name.split("module.")[-1]].copy_(param)
-                else:
-                    print(name, " not loaded")
-                    continue
-            else:
-                own_state[name].copy_(param)
-        return model
-
     model = load_my_state_dict(model, torch.load(weightspath, map_location=lambda storage, loc: storage))
-    print ("Model and weights LOADED successfully")
+    print("Model and weights LOADED successfully")
     model.eval()
-    print(os.path.expanduser(str(args.input[0])))
+    
     for path in glob.glob(os.path.expanduser(str(args.input[0]))):
         print(path)
         images = input_transform((Image.open(path).convert('RGB'))).unsqueeze(0).float().cuda()
-        # images = images.permute(0,3,1,2)
         with torch.no_grad():
             result = model(images)
         result = result.squeeze(0)
+        
         anomaly_result_logit = 1.0 - np.max(result.data.cpu().numpy(), axis=0)
         probs_tensor = torch.nn.functional.softmax(result.data.cpu(), dim=0)  
         anomaly_result_softmax = 1.0 - np.max(probs_tensor.numpy(), axis=0)
         anomaly_result_entropy = -torch.sum(probs_tensor * torch.log(probs_tensor), dim=0).data.cpu().numpy()            
-        pathGT = path.replace("images", "labels_masks")                
-        if "RoadObstacle21" in pathGT:
-           pathGT = pathGT.replace("webp", "png")
-        if "fs_static" in pathGT:
-           pathGT = pathGT.replace("jpg", "png")                
-        if "RoadAnomaly" in pathGT:
-           pathGT = pathGT.replace("jpg", "png")  
-
+        
+        pathGT = create_pathGT(path)
         mask = Image.open(pathGT)
         mask = target_transform(mask)
-        ood_gts = np.array(mask)
-
-
-        if "RoadAnomaly" in pathGT:
-            ood_gts = np.where((ood_gts==2), 1, ood_gts)
-        if "LostAndFound" in pathGT:
-            ood_gts = np.where((ood_gts==0), 255, ood_gts)
-            ood_gts = np.where((ood_gts==1), 0, ood_gts)
-            ood_gts = np.where((ood_gts>1)&(ood_gts<201), 1, ood_gts)
-
-        if "Streethazard" in pathGT:
-            ood_gts = np.where((ood_gts==14), 255, ood_gts)
-            ood_gts = np.where((ood_gts<20), 0, ood_gts)
-            ood_gts = np.where((ood_gts==255), 1, ood_gts)
+        ood_gts = create_oodgts(mask, pathGT)
 
         if 1 not in np.unique(ood_gts):
             continue              
@@ -143,27 +107,6 @@ def main():
         torch.cuda.empty_cache()
 
     file.write( "\n")
-    def eval_score(ood_gts_list, anomaly_score_list):
-    
-        ood_gts = np.array(ood_gts_list)
-        anomaly_scores = np.array(anomaly_score_list)
-
-        ood_mask = (ood_gts == 1)
-        ind_mask = (ood_gts == 0)
-
-        ood_out = anomaly_scores[ood_mask]
-        ind_out = anomaly_scores[ind_mask]
-
-        ood_label = np.ones(len(ood_out))
-        ind_label = np.zeros(len(ind_out))
-
-        val_out = np.concatenate((ind_out, ood_out))
-        val_label = np.concatenate((ind_label, ood_label))
-
-        prc_auc = average_precision_score(val_label, val_out)
-        fpr = fpr_at_95_tpr(val_out, val_label)
-
-        return [prc_auc, fpr]
 
     [prc_auc_logit, fpr_logit] = eval_score(ood_gts_list, anomaly_score_logit_list)
     [prc_auc_softmax, fpr_softmax] = eval_score(ood_gts_list, anomaly_score_softmax_list)

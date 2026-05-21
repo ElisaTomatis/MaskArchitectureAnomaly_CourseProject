@@ -9,6 +9,8 @@ import torch.nn.functional as F
 import os
 import importlib
 import time
+import yaml
+import warnings
 
 from PIL import Image
 from argparse import ArgumentParser
@@ -18,11 +20,12 @@ from torch.utils.data import DataLoader
 from torchvision.transforms import Compose, CenterCrop, Normalize, Resize
 from torchvision.transforms import ToTensor, ToPILImage
 
-from dataset import cityscapes
-from models.eomt import EoMT 
-from transform import Relabel, ToLabel, Colorize
 from iouEval import iouEval, getColorEntry
-from evalAnomalyEomt import *
+from functions import *
+from lightning import seed_everything
+from torch.nn import functional as F
+from datasets.dataset_IoU import cityscapes
+from datasets.transform_IoU import Relabel, ToLabel, Colorize
 
 NUM_CHANNELS = 3
 NUM_CLASSES = 20
@@ -40,15 +43,22 @@ target_transform_cityscapes = Compose([
 
 def main(args):
     
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = load_eomt(args, device)
+    seed_everything(0, verbose=False)
 
-    if(not os.path.exists(args.datadir)):
-        print ("Error: datadir could not be loaded")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")   # TODO: change to the GPU you want to use
+    config_path = 'configs/dinov2/cityscapes/semantic/eomt_base_640.yaml' 
+    with open(config_path, "r") as f:
+        config = yaml.safe_load(f)
+    state_dict_path = '/content/drive/MyDrive/Colab Notebooks/eomt_cityscapes.bin'
+    
+    warnings.filterwarnings("ignore",
+        message=r".*Attribute 'network' is an instance of `nn\.Module` and is already saved during checkpointing.*",
+    )
 
+    model = load_model(device, config, state_dict_path)
+    
 
     loader = DataLoader(cityscapes(args.datadir, input_transform_cityscapes, target_transform_cityscapes, subset=args.subset), num_workers=args.num_workers, batch_size=args.batch_size, shuffle=False)
-
 
     iouEvalVal = iouEval(NUM_CLASSES)
 
@@ -58,35 +68,9 @@ def main(args):
         if (not args.cpu):
             images = images.cuda()
             labels = labels.cuda()
-
-        inputs = Variable(images)
-        with torch.no_grad():
-            result = model(images)
-    
-        mask_logits_last_layer = result[0][-1] # Just the last layer's mask of the transformer
-        class_logits_last_layer = result[1][-1]
-
-        # Expands the output mask dimensions of the model to match the ground truth's
-        mask_logits_last_layer = torch.nn.functional.interpolate(
-            mask_logits_last_layer,
-            size=(1024, 1024),
-            mode="bilinear",
-            align_corners=False,
-        )
-
-        mask_prob = torch.sigmoid(mask_logits_last_layer) 
-        class_prob = torch.softmax(class_logits_last_layer, dim=-1)
-
-        B, Q, C = class_prob.shape
-        _, _, H, W = mask_prob.shape
-        cp = class_prob.transpose(1, 2) # (B, C, Q)
-        mp = torch.flatten(input = mask_prob,start_dim = 2) # (B, Q, H*W)
-        # This operation is performed for each batch
-        pixel_logits = torch.matmul(cp, mp) # (B, C, H*W)
-        pixel_logits = pixel_logits.unflatten(2, (H, W)) # (B, C, H, W)
-        # Per ogni pixel, score per classe
-        pixel_logits = pixel_logits.squeeze(0) # (C, H, W)
-
+        images = images.squeeze(0)
+        images = (images * 255).to(torch.uint8)
+        pixel_logits = compute_logits(images, device, model) 
 
         iouEvalVal.addBatch(pixel_logits.max(0)[1].unsqueeze(0).unsqueeze(0).data, labels)
 
@@ -134,12 +118,8 @@ if __name__ == '__main__':
     parser = ArgumentParser()
 
     parser.add_argument('--state')
-
-    parser.add_argument('--loadDir',default="../trained_models/")
-    parser.add_argument('--loadWeights', default="erfnet_pretrained.pth")
-    parser.add_argument('--loadModel', default="erfnet.py")
     parser.add_argument('--subset', default="val")  #can be val or train (must have labels)
-    parser.add_argument('--datadir', default="/home/shyam/ViT-Adapter/segmentation/data/cityscapes/")
+    parser.add_argument('--datadir', default="/content/drive/MyDrive/ml_anomaly_segmentation/cityscapes_dataset")
     parser.add_argument('--num-workers', type=int, default=4)
     parser.add_argument('--batch-size', type=int, default=1)
     parser.add_argument('--cpu', action='store_true')
