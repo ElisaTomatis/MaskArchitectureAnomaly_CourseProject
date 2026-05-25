@@ -84,7 +84,7 @@ def main():
              anomaly_score_softmax_list.append(anomaly_result_softmax)
              anomaly_score_entropy_list.append(anomaly_result_entropy)
              anomaly_score_rba_list.append(anomaly_result_rba)
-        del anomaly_result_logit, anomaly_result_softmax, anomaly_result_entropy ,ood_gts, mask
+        del anomaly_result_logit, anomaly_result_softmax, anomaly_result_entropy, anomaly_result_rba, ood_gts, mask
         if device == 'cuda':
             torch.cuda.empty_cache()
 

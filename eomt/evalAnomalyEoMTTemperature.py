@@ -53,7 +53,7 @@ def main():
     ood_gts_list = []
 
     t_vec = np.concatenate((np.array((0.5,0.75,1.1)), np.exp(np.linspace(np.log(0.1), np.log(50), 20))))    
-    for path in glob.glob(os.path.expanduser(str(args.input[0]))):
+    for path in glob.glob(os.path.expanduser(str(args.input))):
         print(path)
         if device == 'cpu':
             image = input_transform((Image.open(path).convert('RGB'))).unsqueeze(0).float()
@@ -79,7 +79,7 @@ def main():
         else:
              ood_gts_list.append(ood_gts)
              anomaly_score_softmax_list.append(anomaly_result_list)
-        del result, anomaly_result_softmax, ood_gts, mask
+        del pixel_logits, anomaly_result_softmax, ood_gts, mask
         if device == 'cuda':
             torch.cuda.empty_cache()
 
