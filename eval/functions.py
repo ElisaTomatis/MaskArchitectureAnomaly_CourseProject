@@ -38,7 +38,7 @@ def eval_score(ood_gts_list, anomaly_score_list):
 
 def create_pathGT(path):
     pathGT = path.replace("images", "labels_masks")                
-    if "RoadObstacle21" in pathGT:
+    if "RoadObsticle21" in pathGT:
         pathGT = pathGT.replace("webp", "png")
     if "fs_static" in pathGT:
         pathGT = pathGT.replace("jpg", "png")                

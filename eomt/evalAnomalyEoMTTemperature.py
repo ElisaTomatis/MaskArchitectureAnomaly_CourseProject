@@ -37,7 +37,7 @@ def main():
     config_path = 'configs/dinov2/cityscapes/semantic/eomt_base_640.yaml' 
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
-    state_dict_path = '/content/drive/MyDrive/Colab Notebooks/eomt_cityscapes.bin'
+    state_dict_path = '/content/drive/MyDrive/ml_anomaly_segmentation/eomt_cityscapes.bin'
     
     warnings.filterwarnings("ignore",
         message=r".*Attribute 'network' is an instance of `nn\.Module` and is already saved during checkpointing.*",
@@ -79,7 +79,7 @@ def main():
         else:
              ood_gts_list.append(ood_gts)
              anomaly_score_softmax_list.append(anomaly_result_list)
-        del pixel_logits, anomaly_result_softmax, ood_gts, mask
+        del pixel_logits, anomaly_result_list, ood_gts, mask
         if device == 'cuda':
             torch.cuda.empty_cache()
 
