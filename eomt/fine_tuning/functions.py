@@ -1,147 +1,217 @@
-import numpy as np
 import random
+import cv2
+import numpy as np
+from pycocotools.coco import COCO
+import numpy as np
+import torch
+from torchvision import tv_tensors
 
-import os
-import sys
-import time
+# prende un oggetto dal dataset COCO e lo incolla dentro un'immagine
+# viene trattato come oggetto OoD
+class CocoOODPaster:
+    def __init__(
+        self,
+        coco_root, # cartella del dataset COCO
+        split="val2017", # sottoinsieme del dataset da usare
+        categories=None, # categorie di COCO da cui prendere oggetti
+        target_height_range=(80, 250), # intervallo per l'altezza dell'oggetto incollato
+    ):
+        self.coco_root = coco_root
+        self.split = split
+        self.img_dir = f"{coco_root}/{split}" # percorso cartella con immagini
+        self.ann_file = f"{coco_root}/annotations/instances_{split}.json" # percorso cartella con annotazioni
 
-from PIL import Image
-from src.dataset.coco import COCO
-from pycocotools.coco import COCO as coco_tools
+        self.coco = COCO(self.ann_file) # carica le annotazioni usando pycocotools
 
-def extract_bboxes(mask):
-    """Compute bounding boxes from masks.
-    mask: [height, width, num_instances]. Mask pixels are either 1 or 0.
-    Returns: bbox array [num_instances, (y1, x1, y2, x2)].
+        if categories is None:
+            categories = [
+                "elephant", "giraffe", "zebra", "bear",
+                "couch", "chair", "toaster", "microwave",
+                "banana", "apple", "backpack"
+            ]
 
-    Adapted from https://github.com/tianyu0207/PEBAL/blob/main/code/dataset/data_loader.py
-    """
+        self.categories = categories
+        self.cat_ids = self.coco.getCatIds(catNms=categories)
+        # converte i nomi delle categorie negli ID COCO
 
-    boxes = np.zeros([mask.shape[-1], 4], dtype=np.int32)
-    for i in range(mask.shape[-1]):
-        m = mask[:, :, i]
-        # Bounding box.
-        horizontal_indicies = np.where(np.any(m, axis=0))[0]
-        vertical_indicies = np.where(np.any(m, axis=1))[0]
-        if horizontal_indicies.shape[0]:
-            x1, x2 = horizontal_indicies[[0, -1]]
-            y1, y2 = vertical_indicies[[0, -1]]
-            # x2 and y2 should not be part of the box. Increment by 1.
-            x2 += 1
-            y2 += 1
-        else:
-            # No mask for this instance. Might happen due to
-            # resizing or cropping. Set bbox to zeros
-            x1, x2, y1, y2 = 0, 0, 0, 0
+        self.img_ids = []
+        # lista che contiene gli ID delle immagini COCO contenenti almeno una categoria scelta
+        for cat_id in self.cat_ids:
+            self.img_ids.extend(self.coco.getImgIds(catIds=[cat_id]))
 
-        boxes[i] = np.array([y1, x1, y2, x2])
+        self.img_ids = list(set(self.img_ids)) # rimuove duplicati
 
-    return boxes.astype(np.int32)
+        if len(self.img_ids) == 0:
+            raise ValueError("Nessuna immagine trovata per le categorie scelte.")
 
+        self.target_height_range = target_height_range
 
-def mix_object(current_labeled_image, current_labeled_mask, cut_object_image, cut_object_mask, ood_label):
-    """
-    Adapted from Adapted from https://github.com/tianyu0207/PEBAL/blob/main/code/dataset/data_loader.py
-    """
-    mask = (cut_object_mask == ood_label)
+    def get_random_object(self):
+    # metodo che estrae casualmente un oggetto dal dataset COCO
     
-    ood_mask = np.expand_dims(mask, axis=2)
-    ood_boxes = extract_bboxes(ood_mask)
-    ood_boxes = ood_boxes[0, :]  # (y1, x1, y2, x2)
-    y1, x1, y2, x2 = ood_boxes[0], ood_boxes[1], ood_boxes[2], ood_boxes[3]
-    cut_object_mask = cut_object_mask[y1:y2, x1:x2]
-    cut_object_image = cut_object_image[y1:y2, x1:x2, :]
+        img_id = random.choice(self.img_ids)
+        # sceglie casualmente un'immagine tra quelle selezionate
+        img_info = self.coco.loadImgs(img_id)[0]
+        # carica le informazioni dell'immagine scelta
 
-    mask = cut_object_mask == ood_label
+        ann_ids = self.coco.getAnnIds(
+            imgIds=img_id,
+            catIds=self.cat_ids,
+            iscrowd=False
+        ) # ID delle annotazioni dell'immagine scelta
+        
+        # ogni annotazione corrisponde ad un oggetto nell'immagine
+        # contiene: ID dell'immagine a cui appartiene, categoria, bounding box
 
-    idx = np.transpose(np.repeat(np.expand_dims(cut_object_mask, axis=0), 3, axis=0), (1, 2, 0))
+        ann = random.choice(self.coco.loadAnns(ann_ids))
+        # sceglie un'annotazione casuale (oggetto da ritagliare)
 
-    # if current_labeled_mask.shape[0] != 1024 or current_labeled_mask.shape[1] != 2048:
-    #     print('wrong size')
-    #     print(current_labeled_mask.shape)
-    #     return current_labeled_image, current_labeled_mask
+        img_path = f"{self.img_dir}/{img_info['file_name']}"
+        img = cv2.imread(img_path)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
-    if mask.shape[0] != 0:
-        if current_labeled_mask.shape[0] - cut_object_mask.shape[0] < 0 or \
-                current_labeled_mask.shape[1] - cut_object_mask.shape[1] < 0:
-            # print('wrong size')
-            # print(current_labeled_mask.shape)
-            return current_labeled_image, current_labeled_mask
-        h_start_point = random.randint(0, current_labeled_mask.shape[0] - cut_object_mask.shape[0])
-        h_end_point = h_start_point + cut_object_mask.shape[0]
-        w_start_point = random.randint(0, current_labeled_mask.shape[1] - cut_object_mask.shape[1])
-        w_end_point = w_start_point + cut_object_mask.shape[1]
-    else:
-        # print('no odd pixel to mix')
-        h_start_point = 0
-        h_end_point = 0
-        w_start_point = 0
-        w_end_point = 0
+        mask = self.coco.annToMask(ann).astype(np.uint8)
+        # converte l'annotazione in una maschera binaria
+
+        ys, xs = np.where(mask > 0)
+        # trova i pixel appartenenti all'oggetto
+        
+        # bounding box dell'oggetto
+        ymin, ymax = ys.min(), ys.max()
+        xmin, xmax = xs.min(), xs.max()
+
+        obj_img = img[ymin:ymax + 1, xmin:xmax + 1]
+        # ritaglia dall'immagine originale la regione contenente l'oggetto
+        obj_mask = mask[ymin:ymax + 1, xmin:xmax + 1]
+        # ritaglia allo stesso modo la maschera
+        
+        # hanno dimensione rettangolare ma poi in paste viene
+        # effettivamente incollato solo l'oggeto tramite una maschera
+
+        cat_name = self.coco.loadCats([ann["category_id"]])[0]["name"]
+        # categoria associata all'annotazione scelta
+
+        return obj_img, obj_mask, cat_name
+        # restituisce immagine ritagliata, maschera e categoria
+
+    def resize_object(self, obj_img, obj_mask):
+    # metodo che ridimensiona l'oggetto mantenendo le proprozioni
+        h, w = obj_img.shape[:2] # dimensione oggetto
+
+        target_h = random.randint(*self.target_height_range)
+        # sceglie casualmente una nuova altezza nel range
+        scale = target_h / h
+        target_w = int(w * scale)
+        # nuova larghezza mantenendo le proporzioni
+
+        obj_img = cv2.resize(obj_img, (target_w, target_h))
+        # ridimensiona l'immagine dell'oggetto
+        
+        obj_mask = cv2.resize(
+            obj_mask,
+            (target_w, target_h),
+            interpolation=cv2.INTER_NEAREST
+        ) # ridimensiona la maschera
+
+        return obj_img, obj_mask
+        # restituisce oggetto e maschera ridimensionate
+
+    def paste(self, city_img):
+        """
+        city_img: immagine RGB, array numpy H x W x 3
+
+        returns:
+            city_paste: immagine RGB con oggetto OOD incollato
+            ood_mask: maschera binaria H x W
+            cat_name: nome della categoria incollata
+        """
+
+        city_paste = city_img.copy()
+        H, W = city_paste.shape[:2]
+
+        obj_img, obj_mask, cat_name = self.get_random_object()
+        # estrae casualmente un oggetto da COCO
+        obj_img, obj_mask = self.resize_object(obj_img, obj_mask)
+        # ridimensiona casualmemte l'oggetto
+
+        h, w = obj_img.shape[:2]
+        
+        # Se l'oggetto è più grande dell'immagine Cityscapes, lo ridimensiona
+        if w > W or h > H:
+            scale = min(W / w, H / h) * 0.8
+
+            new_w = max(1, int(w * scale))
+            new_h = max(1, int(h * scale))
+
+            obj_img = cv2.resize(obj_img, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+            obj_mask = cv2.resize(obj_mask, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
+
+            h, w = obj_img.shape[:2]
+                
+        # sceglie casualmente le coordinate in cui incollare l'oggetto
+        x = random.randint(0, W - w)
+        y = random.randint(0, H - h)
+
+        roi = city_paste[y:y+h, x:x+w]
+        # regione dell'immagine in cui verrà incollato l'oggetto
+
+        mask_bool = obj_mask > 0 # maschera oggetto
+        roi[mask_bool] = obj_img[mask_bool]
+        # copia nella roi solo i pixel dell'oggetto
+
+        city_paste[y:y+h, x:x+w] = roi
+        # mette la roi nell'immagine completa
+
+        ood_mask = np.zeros((H, W), dtype=np.uint8)
+        ood_mask[y:y+h, x:x+w] = obj_mask # maschera oggetto incollato
+
+        return city_paste, ood_mask, cat_name
     
-    result_image = current_labeled_image.copy()
-    result_image[h_start_point:h_end_point, w_start_point:w_end_point, :][np.where(idx == ood_label)] = \
-        cut_object_image[np.where(idx == ood_label)]
-    result_label = current_labeled_mask.copy()
-    result_label[h_start_point:h_end_point, w_start_point:w_end_point][np.where(cut_object_mask == ood_label)] = \
-        cut_object_mask[np.where(cut_object_mask == ood_label)]
-
-    return result_image, result_label
 
 
-def cut_images():
-    start = time.time()
-    root = cs_coco_roots.coco_root
-    split = "train"
-    year = 2017
-    id_in = COCO.train_id_in
-    id_out = COCO.train_id_out
-    min_size = COCO.min_image_size
-    annotation_file = '{}/annotations/instances_{}.json'.format(root, split+str(year))
-    images_dir = '{}/{}'.format(root, split+str(year))
-    tools = coco_tools(annotation_file)
-    save_dir = '{}/annotations/ood_seg_{}'.format(root, split+str(year))
-    print("\nPrepare COCO{} {} split for OoD training".format(str(year), split))
+# prende un dataset esistente
+# prende ogni elemento di tale dataset e con una certa probabilità lo modifica
+class OODDatasetWrapper(torch.utils.data.Dataset):
+    def __init__(self, base_dataset, paster, p_ood=0.5):
+        self.base_dataset = base_dataset # dataset originale
+        self.paster = paster # oggetto che sa incollare OoD su un'immagine
+        self.p_ood = p_ood # probabilità di applicare il paste
 
-    # Names of classes that are excluded - these are Cityscapes classes also available in COCO
-    exclude_classes = ['person', 'bicycle', 'car', 'motorcycle', 'bus', 'truck', 'traffic light', 'stop sign']
+    def __len__(self):
+        return len(self.base_dataset)
+        # ha la stessa lunghezza del dataset originale
 
-    # Fetch all image ids that does not include instance from classes defined in "exclude_classes"
-    exclude_cat_Ids = tools.getCatIds(catNms=exclude_classes)
-    exclude_img_Ids = []
-    for cat_Id in exclude_cat_Ids:
-        exclude_img_Ids += tools.getImgIds(catIds=cat_Id)
-    exclude_img_Ids = set(exclude_img_Ids)
-    img_Ids = [int(image[:-4]) for image in os.listdir(images_dir) if int(image[:-4]) not in exclude_img_Ids]
+    def __getitem__(self, idx):
+        img, target = self.base_dataset[idx]
+        # prende immagine e target dal dataset originale
+        # target è un dizionario con:
+        # - target["masks"]    : [N, H, W] maschere binarie delle N istanze presenti
+        # - target["labels"]   : [N] classe associata ad ogni istanza
+        # - target["is_crowd"] : [N] flag crowd/ignore per ogni istanza
+        # - target["ood_mask"] : [H, W] maschera booleana dei pixel OoD
 
-    num_masks = 0
-    # Process each image
-    print("Ground truth segmentation mask will be saved in:", save_dir)
-    if not os.path.exists(save_dir):
-        os.makedirs(save_dir)
-        print("Created save directory:", save_dir)
-    for i, img_Id in enumerate(img_Ids):
-        img = tools.loadImgs(img_Id)[0]
-        h, w = img['height'], img['width']
+        if random.random() > self.p_ood:
+            target["ood_mask"] = torch.zeros(img.shape[-2:], dtype=torch.bool)
+            # non viene applicato nessun oggetto OoD
+            # restituisce una maschera tutta falsa
+        else: 
+            img_np = img.permute(1, 2, 0).cpu().numpy()
 
-        # Select only images with height and width of at least min_size
-        if h >= min_size and w >= min_size:
-            ann_Ids = tools.getAnnIds(imgIds=img['id'], iscrowd=None)
-            annotations = tools.loadAnns(ann_Ids)
+            # valori tra 0 e 255
+            if img_np.max() <= 1.0:
+                img_np = (img_np * 255).astype(np.uint8)
+            else:
+                img_np = img_np.astype(np.uint8)
 
-            # Generate binary segmentation mask
-            mask = np.ones((h, w), dtype="uint8") * id_in
-            for j in range(len(annotations)):
-                mask = np.maximum(tools.annToMask(annotations[j])*id_out, mask)
+            img, ood_mask, cat_name = self.paster.paste(img_np)
 
-            # Save segmentation mask
-            Image.fromarray(mask).save(os.path.join(save_dir, "{:012d}.png".format(img_Id)))
-            num_masks += 1
-        print("\rImages Processed: {}/{}".format(i + 1, len(img_Ids)), end=' ')
-        sys.stdout.flush()
+            img = torch.from_numpy(img).permute(2, 0, 1)
+            img = tv_tensors.Image(img)
 
-    # Print summary
-    print("\nNumber of created segmentation masks with height and width of at least %d pixels:" % min_size, num_masks)
-    end = time.time()
-    hours, rem = divmod(end - start, 3600)
-    minutes, seconds = divmod(rem, 60)
-    print("FINISHED {:0>2}:{:0>2}:{:05.2f}".format(int(hours), int(minutes), seconds))
+            target["ood_mask"] = torch.from_numpy(ood_mask > 0)
+            # maschera booleana: i pixel con valore >1 diventano true
+            target["ood_category"] = cat_name
+            # nome della categoria incollata
+        
+        return img, target
+

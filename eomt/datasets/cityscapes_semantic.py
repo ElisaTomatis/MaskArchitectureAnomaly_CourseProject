@@ -13,6 +13,8 @@ from datasets.lightning_data_module import LightningDataModule
 from datasets.dataset import Dataset
 from datasets.transforms import Transforms
 
+from eomt.fine_tuning.functions import *
+
 
 class CityscapesSemantic(LightningDataModule):
     def __init__(
@@ -97,3 +99,42 @@ class CityscapesSemantic(LightningDataModule):
             collate_fn=self.eval_collate,
             **self.dataloader_kwargs,
         )
+
+
+class CityscapesSemanticOE(CityscapesSemantic):
+    def __init__(
+        self,
+        path, # percorso cityscapes
+        coco_root, # percorso coco
+        p_ood=0.5,
+        **kwargs
+    ):
+        super().__init__(
+            path=path,
+            num_classes=19,
+            **kwargs
+        )
+        # costruisce un classico cityscapes con 19 classi
+
+        self.coco_root = coco_root
+        self.p_ood = p_ood
+
+    def setup(self, stage=None):
+        super().setup(stage)
+        # costruisce normalmente training e validation set
+
+        paster = CocoOODPaster(
+            coco_root=self.coco_root,
+            split="val2017",
+            target_height_range=(80, 250), # TODO da valutare se aumentare
+        )
+        # Crea un oggetto che prende istanze da COCO val2017 e le incolla sulle immagini Cityscapes.
+
+        self.cityscapes_train_dataset = OODDatasetWrapper(
+            base_dataset=self.cityscapes_train_dataset,
+            paster=paster,
+            p_ood=self.p_ood,
+        )
+        # sostituisce il training dataset con un wrapper
+
+        return self
