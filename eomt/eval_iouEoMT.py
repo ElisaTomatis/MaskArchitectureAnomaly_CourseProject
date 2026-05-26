@@ -3,11 +3,7 @@
 # Eduardo Romera
 #######################
 
-import numpy as np
 import torch
-import torch.nn.functional as F
-import os
-import importlib
 import time
 import yaml
 import warnings
@@ -15,17 +11,15 @@ import warnings
 from PIL import Image
 from argparse import ArgumentParser
 
-from torch.autograd import Variable
 from torch.utils.data import DataLoader
-from torchvision.transforms import Compose, CenterCrop, Normalize, Resize
+from torchvision.transforms import Compose, Resize
 from torchvision.transforms import ToTensor, ToPILImage
 
 from iouEval import iouEval, getColorEntry
 from functions import *
 from lightning import seed_everything
-from torch.nn import functional as F
 from datasets.dataset_IoU import cityscapes
-from datasets.transform_IoU import Relabel, ToLabel, Colorize
+from datasets.transform_IoU import Relabel, ToLabel
 
 NUM_CHANNELS = 3
 NUM_CLASSES = 20

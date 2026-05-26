@@ -66,14 +66,14 @@ def main():
         anomaly_result_list = []
         for t in t_vec:
             probs_tensor = torch.nn.functional.softmax(pixel_logits.data.cpu() / t, dim=0)  
-            anomaly_result_softmax = 1.0 - np.max(probs_tensor.numpy(), axis=0)
+            anomaly_result_softmax = (1.0 - np.max(probs_tensor.numpy(), axis=0)).astype(np.float32)
             anomaly_result_list.append(anomaly_result_softmax)    
 
         pathGT = create_pathGT(path)  
         mask = Image.open(pathGT)
         mask = target_transform(mask)
         # ground truth mask
-        ood_gts = create_oodgts(mask, pathGT)
+        ood_gts = create_oodgts(mask, pathGT).astype(np.uint8)
         if 1 not in np.unique(ood_gts):
             continue           
         else:
@@ -85,11 +85,15 @@ def main():
 
     file.write( "\n")
 
-    scores_array = np.array(anomaly_score_softmax_list)
+    # se tutto va questa riga sarà da eliminare
+    # scores_array = np.array(anomaly_score_softmax_list)
     auprc_list = []
     fpr_list = []
     for i,t in enumerate(t_vec):
-        [prc_auc_softmax, fpr_softmax] = eval_score(ood_gts_list, scores_array[:, i])
+        print(f'sono arrivato nel for fino a {i} {t}')
+        current_t_scores = [img_scores[i] for img_scores in anomaly_score_softmax_list]
+        [prc_auc_softmax, fpr_softmax] = eval_score(ood_gts_list, current_t_scores) # scores_array[:, i])
+        print('ho superato eval_score')
         auprc_list.append(prc_auc_softmax)
         fpr_list.append(fpr_softmax)
         if i <= 2:

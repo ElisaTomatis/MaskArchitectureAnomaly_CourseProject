@@ -3,11 +3,8 @@
 # Eduardo Romera
 #######################
 
-import numpy as np
 import torch
-import torch.nn.functional as F
 import os
-import importlib
 import time
 
 from PIL import Image
@@ -15,7 +12,7 @@ from argparse import ArgumentParser
 
 from torch.autograd import Variable
 from torch.utils.data import DataLoader
-from torchvision.transforms import Compose, CenterCrop, Normalize, Resize
+from torchvision.transforms import Compose, Resize
 from torchvision.transforms import ToTensor, ToPILImage
 
 from dataset import cityscapes

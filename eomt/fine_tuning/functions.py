@@ -5,6 +5,10 @@ from pycocotools.coco import COCO
 import numpy as np
 import torch
 from torchvision import tv_tensors
+import torch.nn.functional as F
+
+from functions import *
+from eomt.functions import compute_logits, load_model
 
 # prende un oggetto dal dataset COCO e lo incolla dentro un'immagine
 # viene trattato come oggetto OoD
@@ -214,4 +218,150 @@ class OODDatasetWrapper(torch.utils.data.Dataset):
             # nome della categoria incollata
         
         return img, target
+
+def ood_hinge_loss(logits, ood_mask, margin=0.1):
+    """
+    logits:   [19, H, W] oppure [1, 19, H, W]
+    ood_mask: [H, W] oppure [1, H, W]
+    """
+
+    if logits.dim() == 3:
+        logits = logits.unsqueeze(0)
+
+    if ood_mask.dim() == 2:
+        ood_mask = ood_mask.unsqueeze(0)
+
+    ood_mask = ood_mask.to(logits.device).bool()
+
+    probs = torch.sigmoid(logits)
+    # trasformo in probabilita non esclusive (sigmoid)
+    confidence = probs.sum(dim=1)
+    # somma le probbailità sulle 19 classi note
+    # [B, 19, H, W] -> [B, H, W]
+
+    loss_map = F.relu(confidence - margin) ** 2
+
+    if not ood_mask.any():
+        return logits.new_tensor(0.0)
+    # se non ci sono pixel OoD nella maschera restituisce 0
+
+    return loss_map[ood_mask].mean()
+
+
+def train_one_epoch(model, train_loader, optimizer, device, lambda_oe=0.1, margin=0.1, ignore_index=255, file=None):
+    
+    model.train()
+
+    epoch_loss = 0.0
+    epoch_loss_seg = 0.0
+    epoch_loss_ood = 0.0
+    num_batches = 0
+
+    for batch_idx, batch in enumerate(train_loader):
+        images, targets = batch
+
+        optimizer.zero_grad()
+        # liste per le loss del batch
+        batch_losses = []
+        batch_seg_losses = []
+        batch_ood_losses = []
+
+        for image, target in zip(images, targets):
+            image = image.to(device)
+
+            if image.dtype != torch.uint8:
+                image_input = (image * 255).to(torch.uint8)
+            else:
+                image_input = image
+
+            logits = compute_logits(image_input, device, model)  # [19, H, W]
+
+            # maschera semantica ID: [H, W], valori 0..18, ignore_index su pixel da ignorare
+            masks = target["masks"].to(device).bool()
+            labels = target["labels"].to(device).long()
+
+            H, W = masks.shape[-2:]
+            ood_mask = target["ood_mask"].to(device).bool()
+
+            # se tutto funziona questi assert sono da togliere
+            assert logits.shape[-2:] == (H, W), (logits.shape, H, W)
+            assert ood_mask.shape == (H, W), (ood_mask.shape, H, W)
+
+            # semantic mask: [H, W]
+            sem_mask_b = torch.full(
+                (H, W),
+                fill_value=ignore_index, # inizialmente tutta a 255
+                device=device,
+                dtype=torch.long,
+            )
+
+            for m, label in zip(masks, labels):
+                sem_mask_b[m] = label # assegna ai pixel dell'oggetto la maschera corrispondente
+            
+
+            # maschera OoD: [H, W], bool
+            ood_mask = target["ood_mask"].to(device).bool()
+
+            # loss di segmentazione sui pixel ID
+            loss_seg = F.cross_entropy(
+                logits.unsqueeze(0),
+                sem_mask_b.unsqueeze(0),
+                ignore_index=ignore_index,
+            )
+
+            # loss OoD sui pixel outlier
+            loss_ood = ood_hinge_loss(
+                logits=logits,
+                ood_mask=ood_mask,
+                margin=margin,
+            )
+
+            loss = loss_seg + lambda_oe * loss_ood
+
+            batch_losses.append(loss)
+            batch_seg_losses.append(loss_seg)
+            batch_ood_losses.append(loss_ood)
+
+        loss_batch = torch.stack(batch_losses).mean()
+        loss_seg_batch = torch.stack(batch_seg_losses).mean()
+        loss_ood_batch = torch.stack(batch_ood_losses).mean()
+
+        loss_batch.backward()
+        optimizer.step()
+
+        epoch_loss += loss_batch.item()
+        epoch_loss_seg += loss_seg_batch.item()
+        epoch_loss_ood += loss_ood_batch.item()
+        num_batches += 1
+
+        if batch_idx % 20 == 0:
+            msg = (
+                f"batch {batch_idx:04d} | "
+                f"loss={loss_batch.item():.6f} | "
+                f"loss_seg={loss_seg_batch.item():.6f} | "
+                f"loss_ood={loss_ood_batch.item():.6f}"
+            )
+
+            print(msg)
+
+            if file is not None:
+                file.write(msg + "\n")
+                file.flush()
+
+    return {
+        "loss": epoch_loss / max(num_batches, 1),
+        "loss_seg": epoch_loss_seg / max(num_batches, 1),
+        "loss_ood": epoch_loss_ood / max(num_batches, 1),
+    }
+
+
+def setup_model(config, state_dict_path, device):
+    model = load_model(device, config, state_dict_path)
+    # Freeze backbone, unfreeze heads (come nel tuo codice)
+    for param in model.parameters():
+        param.requires_grad = False
+    for module in [model.class_head, model.mask_head]:
+        for param in module.parameters():
+            param.requires_grad = True
+    return model.to(device)
 

@@ -9,7 +9,7 @@ import numpy as np
 from erfnet import ERFNet
 import os.path
 from argparse import ArgumentParser
-from torchvision.transforms import Compose, Resize, ToTensor, Normalize
+from torchvision.transforms import Compose, Resize, ToTensor
 from functions import *
 
 seed = 42

@@ -8,7 +8,7 @@ from PIL import Image
 import numpy as np
 from erfnet import ERFNet
 from argparse import ArgumentParser
-from torchvision.transforms import Compose, Resize, ToTensor, Normalize
+from torchvision.transforms import Compose, Resize, ToTensor
 from functions import *
 
 seed = 42
