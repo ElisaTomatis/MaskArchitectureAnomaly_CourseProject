@@ -21,34 +21,34 @@ def main():
     parser.add_argument("--cityscapes-path",
         type=str,
         required=True,
-        help="/content/cityscapes/",
+        default="/content/drive/MyDrive/ml_anomaly_segmentation/cityscapes_dataset",
     )
     parser.add_argument(
         "--coco-root",
         type=str,
         required=True,
-        help="/content/drive/MyDrive/cityscapes/coco",
+        default="/content/drive/MyDrive/ml_anomaly_segmentation/val2017.zip",
     )
     parser.add_argument(
         "--save-path",
         type=str,
-        default="/content/drive/MyDrive/eomt_cityscapes_oe_finetuned.pth",
+        default="/content/drive/MyDrive/ml_anomaly_segmentation/eomt_cityscapes_finetuned.pth",
     ) # dove mettere i pesi aggiornati dopo finetuning
-    parser.add_argument("--epochs", type=int, default=3)
-    parser.add_argument("--batch-size", type=int, default=2)
+    parser.add_argument("--epochs", type=int, default=2)
+    parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--num-workers", type=int, default=4)
-    parser.add_argument("--lr", type=float, default=1e-5)
-    parser.add_argument("--weight-decay", type=float, default=1e-4)
-    parser.add_argument("--p-ood", type=float, default=0.5)
+    parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument("--weight-decay", type=float, default=0.05)
+    parser.add_argument("--p-ood", type=float, default=0.1)
     parser.add_argument("--lambda-oe", type=float, default=0.1)
-    parser.add_argument("--margin", type=float, default=0.1)
+    parser.add_argument("--alpha", type=float, default=5)
     parser.add_argument("--cpu", action="store_true")
     args = parser.parse_args()
 
     use_cuda = (not args.cpu) and torch.cuda.is_available()
     device = torch.device("cuda" if use_cuda else "cpu")
     
-    results_path = '/content/drive/MyDrive/results_finetune.txt'
+    results_path = '/content/drive/MyDrive/ml_anomaly_segmentation/results_finetune.txt'
     print("Scrivo risultati in:", results_path)
     file = open(results_path, 'w')
     file.flush()
@@ -56,7 +56,7 @@ def main():
     config_path = '../configs/dinov2/cityscapes/semantic/eomt_base_640.yaml'
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
-    state_dict_path = '/content/drive/MyDrive/eomt_cityscapes.bin'
+    state_dict_path = '/content/drive/MyDrive/ml_anomaly_segmentation/eomt_cityscapes.bin'
     warnings.filterwarnings("ignore",
         message=r".*Attribute 'network' is an instance of `nn\.Module` and is already saved during checkpointing.*",
     )
@@ -93,14 +93,14 @@ def main():
             optimizer=optimizer,
             device=device,
             lambda_oe=args.lambda_oe,
-            margin=args.margin,
+            alpha=args.alpha,
             file=file,
         )
 
         msg = (
             f"Epoch {epoch + 1}/{args.epochs} | "
             f"loss={avg_loss['loss']:.6f} | "
-            f"loss_seg={avg_loss['loss_seg']:.6f} | "
+            # f"loss_seg={avg_loss['loss_seg']:.6f} | "
             f"loss_ood={avg_loss['loss_ood']:.6f}"
         )
 
