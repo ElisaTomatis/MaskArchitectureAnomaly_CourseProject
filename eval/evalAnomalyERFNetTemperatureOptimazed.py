@@ -91,9 +91,6 @@ def main():
         if not args.cpu:
             images = images.cuda()
 
-        with torch.no_grad():
-            result = model(images)
-        result = result.squeeze(0)  # shape: [NUM_CLASSES, H, W]
 
         # controlla la GT prima di salvare i logit
         pathGT = create_pathGT(path)
@@ -103,19 +100,21 @@ def main():
 
         if 1 not in np.unique(ood_gts):
             print(f"Saltato {path}: nessuna anomalia trovata.")
-            del result, mask, ood_gts
+            del mask, ood_gts
             if not args.cpu:
                 torch.cuda.empty_cache()
-            continue
+        else:
+            with torch.no_grad():
+                result = model(images)
+            result = result.squeeze(0)  # shape: [NUM_CLASSES, H, W]
 
-        # salva i logit su disco solo se l'immagine è valida
-        filename = os.path.basename(path)
-        np.save(f'temp_logits/{filename}.npy', result.data.cpu().numpy())
+            # salva i logit su disco solo se l'immagine è valida
+            filename = os.path.basename(path)
+            np.save(f'temp_logits/{filename}.npy', result.data.cpu().numpy())
 
-        ood_gts_list.append(ood_gts)
-        valid_paths.append(path)
-
-        del result, mask, ood_gts
+            ood_gts_list.append(ood_gts)
+            valid_paths.append(path)
+            del result, mask, ood_gts
         if not args.cpu:
             torch.cuda.empty_cache()
 
@@ -124,7 +123,7 @@ def main():
     # ---------------------------------------------------------------
     file.write("\n")
 
-    t_vec = np.concatenate((np.array((0.5, 0.75, 1.1)), np.exp(np.linspace(np.log(0.1), np.log(50), 20))))
+    t_vec = np.concatenate((np.array((0.5, 0.75, 1.1, 1.0)), np.exp(np.linspace(np.log(0.1), np.log(50), 20))))
     auprc_list = []
     fpr_list = []
 
@@ -146,7 +145,7 @@ def main():
         auprc_list.append(prc_auc_softmax)
         fpr_list.append(fpr_softmax)
 
-        if i <= 2:
+        if i <= 3:
             file.write(f'\n  t = {t} -->  ' + 'AUPRC softmax score:' + str(prc_auc_softmax * 100.0) + '   FPR@TPR95 softmax:' + str(fpr_softmax * 100.0))
             print(f't = {t}')
             print(f'AUPRC softmax score: {prc_auc_softmax * 100.0}')
