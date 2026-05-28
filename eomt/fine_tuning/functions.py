@@ -9,6 +9,7 @@ import torch.nn.functional as F
 
 from functions import *
 from eomt.functions import compute_logits, load_model
+from eomt.training.mask_classification_loss import MaskClassificationLoss
 
 # prende un oggetto dal dataset COCO e lo incolla dentro un'immagine
 # viene trattato come oggetto OoD
@@ -24,7 +25,7 @@ class CocoOODPaster:
         self.split = split
         self.img_dir = f"{coco_root}/{split}" # percorso cartella con immagini
         self.ann_file = f"{coco_root}/annotations/instances_{split}.json" # percorso cartella con annotazioni
-
+        
         self.coco = COCO(self.ann_file) # carica le annotazioni usando pycocotools
 
         if categories is None:
@@ -43,10 +44,9 @@ class CocoOODPaster:
         for cat_id in self.cat_ids:
             self.img_ids.extend(self.coco.getImgIds(catIds=[cat_id]))
 
-        self.img_ids = list(set(self.img_ids)) # rimuove duplicati
+        self.img_ids = list(set(self.img_ids))[0:300] # rimuove duplicati
 
-        if len(self.img_ids) == 0:
-            raise ValueError("Nessuna immagine trovata per le categorie scelte.")
+        print(f'LE FOTO SCELTE DA COCO SONO{len(list(set(self.img_ids)))}')
 
         self.target_height_range = target_height_range
 
@@ -221,21 +221,15 @@ class OODDatasetWrapper(torch.utils.data.Dataset):
 
 def ood_hinge_loss(logits, ood_mask, alpha=5.0):
     """
-    logits:   [19, H, W] oppure [1, 19, H, W]
-    ood_mask: [H, W] oppure [1, H, W]
+    logits:   [B, 19, H, W]
+    ood_mask: [B, H, W]
     """
-
-    if logits.dim() == 3:
-        logits = logits.unsqueeze(0)
-
-    if ood_mask.dim() == 2:
-        ood_mask = ood_mask.unsqueeze(0)
 
     ood_mask = ood_mask.to(logits.device).bool()
 
     score = torch.tanh(logits)
     rba = -score.sum(dim=1)
-    # somma le probbailità sulle 19 classi note
+    # somma le probabilità sulle 19 classi note
     # [B, 19, H, W] -> [B, H, W]
 
     loss_map = F.relu(alpha - rba) ** 2
@@ -253,9 +247,19 @@ def train_one_epoch(model, train_loader, optimizer, device, lambda_oe=0.1, alpha
     model.train()
 
     epoch_loss = 0.0
-    epoch_loss_seg = 0.0
+    # epoch_loss_seg = 0.0
     epoch_loss_ood = 0.0
     num_batches = 0
+
+    mask_class_loss = MaskClassificationLoss(
+                num_points = 12544,
+                oversample_ratio = 3.0,
+                importance_sample_ratio = 0.75,
+                mask_coefficient = 5.0,
+                dice_coefficient = 5.0,
+                class_coefficient = 2.0,
+                num_labels = 19,
+                no_object_coefficient = 0.1)
 
     for batch_idx, batch in enumerate(train_loader):
         images, targets = batch
@@ -263,52 +267,48 @@ def train_one_epoch(model, train_loader, optimizer, device, lambda_oe=0.1, alpha
         optimizer.zero_grad()
         # liste per le loss del batch
         batch_losses = []
-        batch_seg_losses = []
+        # batch_seg_losses = []
         batch_ood_losses = []
 
-        for image, target in zip(images, targets):
-            image = image.to(device)
+        images = images.to(device)
 
-            if image.dtype != torch.uint8:
-                image_input = (image * 255).to(torch.uint8)
-            else:
-                image_input = image
+        if images.dtype != torch.uint8:
+            images_input = (images * 255).to(torch.uint8)
+        else:
+            images_input = images
 
-            logits = compute_logits(image_input, device, model)  # [19, H, W]
+        logits = compute_logits(images_input, device, model)  # [B, 19, H, W]
 
-            # maschera semantica ID: [H, W], valori 0..18, ignore_index su pixel da ignorare
-            masks = target["masks"].to(device).bool()
-            labels = target["labels"].to(device).long()
+        # maschera semantica ID: [B, H, W], valori 0..18, ignore_index su pixel da ignorare
+        masks = targets["masks"].to(device).bool()
+        labels = targets["labels"].to(device).long()
 
-            H, W = masks.shape[-2:]
-            ood_mask = target["ood_mask"].to(device).bool()
+        B, H, W = masks.shape
+        ood_mask = targets["ood_mask"].to(device).bool()
 
-            # se tutto funziona questi assert sono da togliere
-            assert logits.shape[-2:] == (H, W), (logits.shape, H, W)
-            assert ood_mask.shape == (H, W), (ood_mask.shape, H, W)
+        # semantic mask: [H, W]
+        sem_mask_batch = torch.full(
+            (B, H, W),
+            fill_value=ignore_index, # inizialmente tutta a 255
+            device=device,
+            dtype=torch.long,
+        )
 
-            # semantic mask: [H, W]
-            sem_mask_b = torch.full(
-                (H, W),
-                fill_value=ignore_index, # inizialmente tutta a 255
-                device=device,
-                dtype=torch.long,
-            )
+        for m, l in zip(masks, labels):
+            sem_mask_batch[m] = l # assegna ai pixel dell'oggetto la maschera corrispondente
+        
 
-            for m, label in zip(masks, labels):
-                sem_mask_b[m] = label # assegna ai pixel dell'oggetto la maschera corrispondente
-            
+        bce = F.binary_cross_entropy_with_logits(
+            logits,
+            masks.float(),
+        )
 
-            # maschera OoD: [H, W], bool
-            ood_mask = target["ood_mask"].to(device).bool()
+        # AGGIUNGERE ALTRE LOSS(?): CE E DICE
+        dict_losses = {"mask": }    # FORSE BASTA USARE IL FORWARD DI CLASSE MaskClassificationLoss CHE FA TUTTO IN AUTOMATICO: DA CAPIRE
 
-            # loss di segmentazione sui pixel ID
-            # CHIEDERE SE E' DA USARE
-            """loss_seg = F.cross_entropy(
-                logits.unsqueeze(0),
-                sem_mask_b.unsqueeze(0),
-                ignore_index=ignore_index,
-            )"""
+
+            # ANCORA DA INDENTARE VISTO CHE ABBIAMO RIMOSSO IL FOR SULLE IMMAGINI
+            loss_tot = mask_class_loss.loss_total()
 
             # loss OoD sui pixel outlier
             loss_ood = ood_hinge_loss(

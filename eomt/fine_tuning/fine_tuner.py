@@ -27,7 +27,7 @@ def main():
         "--coco-root",
         type=str,
         required=True,
-        default="/content/drive/MyDrive/ml_anomaly_segmentation/val2017.zip",
+        default="/content/drive/MyDrive/ml_anomaly_segmentation/val2017",
     )
     parser.add_argument(
         "--save-path",

@@ -60,9 +60,25 @@ def load_model(device, config, state_dict_path):
 
     return model
 
-def compute_logits(img, device, model):
-    with torch.no_grad(), autocast(dtype=torch.float16, device_type="cuda"):
-        imgs = [img.to(device)]
+def compute_logits(imgs, device, model, train = False):
+    if train:
+        with torch.no_grad(), autocast(dtype=torch.float16, device_type="cuda"):
+            imgs = [img.to(device) for img in imgs]
+            img_sizes = [img.shape[-2:] for img in imgs]
+            crops, origins = model.window_imgs_semantic(imgs)
+
+            mask_logits_per_layer, class_logits_per_layer = model(crops)
+            mask_logits = F.interpolate(
+                mask_logits_per_layer[-1], (1024, 1024), mode="bilinear"
+            )
+
+            crop_logits = model.to_per_pixel_logits_semantic(
+                mask_logits, class_logits_per_layer[-1]
+            )
+            logits = model.revert_window_logits_semantic(crop_logits, origins, img_sizes)
+        
+    else:
+        imgs = [img.to(device) for img in imgs]
         img_sizes = [img.shape[-2:] for img in imgs]
         crops, origins = model.window_imgs_semantic(imgs)
 
