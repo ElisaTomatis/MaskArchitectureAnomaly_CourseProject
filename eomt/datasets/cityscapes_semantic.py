@@ -13,8 +13,6 @@ from datasets.lightning_data_module import LightningDataModule
 from datasets.dataset import Dataset
 from datasets.transforms import Transforms
 
-from eomt.fine_tuning.functions import *
-
 
 class CityscapesSemantic(LightningDataModule):
     def __init__(
@@ -101,7 +99,7 @@ class CityscapesSemantic(LightningDataModule):
         )
 
 
-class CityscapesSemanticOE(CityscapesSemantic):
+"""class CityscapesSemanticOE(CityscapesSemantic):
     def __init__(
         self,
         path, # percorso cityscapes
@@ -120,6 +118,9 @@ class CityscapesSemanticOE(CityscapesSemantic):
         self.p_ood = p_ood
 
     def setup(self, stage=None):
+        # Importiamo qui i helper OOD solo se qualcuno usa questa vecchia classe.
+        from datasets.cityscapes_semantic_oe import CocoOODPaster, OODDatasetWrapper
+
         super().setup(stage)
         # costruisce normalmente training e validation set
 
@@ -138,3 +139,4 @@ class CityscapesSemanticOE(CityscapesSemantic):
         # sostituisce il training dataset con un wrapper
 
         return self
+"""

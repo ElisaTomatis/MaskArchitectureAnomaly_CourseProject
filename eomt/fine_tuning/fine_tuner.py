@@ -1,4 +1,4 @@
-import torch
+"""import torch
 import random
 import numpy as np
 import yaml
@@ -121,4 +121,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main()"""

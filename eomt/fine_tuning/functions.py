@@ -1,4 +1,4 @@
-import random
+"""import random
 import cv2
 import numpy as np
 from pycocotools.coco import COCO
@@ -366,3 +366,4 @@ def setup_model(config, state_dict_path, device):
             param.requires_grad = True
     return model.to(device)
 
+"""
