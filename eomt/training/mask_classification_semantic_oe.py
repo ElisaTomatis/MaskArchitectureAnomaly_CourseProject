@@ -11,7 +11,7 @@ def rba_hinge_loss(
     per_pixel_scores: torch.Tensor,
     ood_mask: torch.Tensor,
     alpha: float = 5.0,
-    reduction: str = "mean",
+    reduction: str = "sum",
 ) -> torch.Tensor:
     """
     Cosa fa:
@@ -71,7 +71,7 @@ class MaskClassificationSemanticOE(MaskClassificationSemantic):
         *args,
         lambda_rba: float = 0.1,
         rba_alpha: float = 5.0,
-        rba_reduction: str = "mean",
+        rba_reduction: str = "sum",
         freeze_heads_only: bool = True,
         **kwargs,
     ) -> None:

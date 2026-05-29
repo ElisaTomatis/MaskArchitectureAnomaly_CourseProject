@@ -247,7 +247,7 @@ class OODDatasetWrapper(torch.utils.data.Dataset):
         self,
         base_dataset: torch.utils.data.Dataset,
         paster: CocoOODPaster,
-        p_ood: float = 0.5,
+        p_ood: float = 0.2,
     ) -> None:
         self.base_dataset = base_dataset
         self.paster = paster
@@ -339,7 +339,7 @@ class CityscapesSemanticOE(CityscapesSemantic):
         self,
         path,
         coco_root: Optional[str | Path] = None,
-        p_ood: float = 0.5,
+        p_ood: float = 0.2,
         coco_split: str = "val2017",
         ood_categories: Optional[Sequence[str]] = None,
         ood_target_height_range: tuple[int, int] = (80, 250),

@@ -12,7 +12,7 @@ model:
   init_args:
     lambda_rba: 0.1
     rba_alpha: 5.0
-    rba_reduction: mean
+    rba_reduction: sum
     freeze_heads_only: True
     attn_mask_annealing_enabled: True
     attn_mask_annealing_start_steps: [3317, 8292, 13268]
