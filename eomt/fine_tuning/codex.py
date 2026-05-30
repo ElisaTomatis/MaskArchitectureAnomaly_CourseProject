@@ -412,7 +412,7 @@ def rba_hinge_loss(
     per_pixel_scores: torch.Tensor,
     ood_mask: torch.Tensor,
     alpha: float = 5.0,
-    reduction: str = "mean",
+    reduction: str = "sum",
 ) -> torch.Tensor:
     """
     Cosa fa:
