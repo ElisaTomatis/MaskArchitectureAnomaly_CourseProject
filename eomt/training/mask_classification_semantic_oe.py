@@ -173,3 +173,67 @@ class MaskClassificationSemanticOE(MaskClassificationSemantic):
             masks.append(mask.bool())
 
         return torch.stack(masks, dim=0)
+    
+    def training_step(self, batch, batch_idx):
+        """
+        Cosa fa:
+            Calcola la loss EoMT standard e la loss RbA sullo stesso batch.
+
+        Input:
+            - batch: coppia (imgs, targets) dal DataLoader
+            - batch_idx: indice del batch corrente
+
+        Output:
+            - loss scalare totale usata da Lightning per backward
+        """
+
+        imgs, targets = batch
+
+        # Forward EoMT: otteniamo una predizione per ciascun blocco.
+        mask_logits_per_block, class_logits_per_block = self(imgs)
+
+        losses_all_blocks = {}
+        for i, (mask_logits, class_logits) in enumerate(
+            zip(mask_logits_per_block, class_logits_per_block)
+        ):
+            losses = self.criterion(
+                masks_queries_logits=mask_logits,
+                class_queries_logits=class_logits,
+                targets=targets,
+            )
+            block_postfix = self.block_postfix(i)
+            # Ogni blocco contribuisce con il suo set di loss.
+            losses_all_blocks |= {
+                f"{key}{block_postfix}": value for key, value in losses.items()
+            }
+
+        # Loss di segmentazione standard, gia' pesata come nella repo originale.
+        seg_loss = self.criterion.loss_total(losses_all_blocks, self.log)
+
+        # Usiamo l'ultimo blocco per la parte RbA a livello pixel.
+        final_mask_logits = F.interpolate(
+            mask_logits_per_block[-1],
+            size=imgs.shape[-2:],
+            mode="bilinear",
+        )
+        per_pixel_scores = self.to_per_pixel_logits_semantic(
+            final_mask_logits,
+            class_logits_per_block[-1],
+        )
+        ood_masks = self._extract_ood_masks(
+            targets=targets,
+            size=imgs.shape[-2:],
+            device=imgs.device,
+        )
+        rba_loss = rba_hinge_loss(
+            per_pixel_scores=per_pixel_scores,
+            ood_mask=ood_masks,
+            alpha=self.rba_alpha,
+            reduction=self.rba_reduction,
+        )
+
+        # La loss finale e' la somma delle due componenti.
+        total_loss = seg_loss + self.lambda_rba * rba_loss
+        self.log("losses/train_rba_loss", rba_loss, sync_dist=True, prog_bar=True)
+        self.log("losses/train_loss_total_oe", total_loss, sync_dist=True, prog_bar=True)
+        return total_loss
