@@ -15,7 +15,7 @@ from scipy import ndimage
 from torch.nn import functional as F
 from torchvision.transforms import Compose, Resize, ToTensor
 
-from functions import compute_logits, load_model
+from functions import compute_logits, create_oodgts, create_pathGT, eval_score, load_model
 
 
 matplotlib.use("Agg")
@@ -79,6 +79,13 @@ input_transform = Compose(
     [
         Resize((1024, 1024), Image.BILINEAR),
         ToTensor(),
+    ]
+)
+
+
+target_transform = Compose(
+    [
+        Resize((1024, 1024), Image.NEAREST),
     ]
 )
 
@@ -179,6 +186,148 @@ def compute_rba_anomaly_score(pixel_logits):
 
     # Restituisco una matrice HxW pronta per essere visualizzata con matplotlib.
     return anomaly_score_rba
+
+
+def compute_anomaly_score_maps(pixel_logits):
+    '''
+    Calcola le quattro mappe di anomaly score usate da `evalAnomalyEoMT.py`.
+
+    Le formule sono mantenute identiche allo script di valutazione originale:
+    logit, softmax, entropy e RbA vengono calcolati sui logits pixel-wise
+    restituiti dal modello EoMT.
+    '''
+    # Porto i logits su CPU una sola volta, cosi tutte le metriche usano gli stessi valori.
+    logits_cpu = pixel_logits.detach().cpu()
+
+    # Score logit: uno meno il massimo logit tra le classi per ogni pixel.
+    anomaly_result_logit = 1.0 - np.max(logits_cpu.numpy(), axis=0)
+
+    # Score softmax: uno meno la massima probabilita softmax per pixel.
+    probs_tensor = F.softmax(logits_cpu, dim=0)
+    anomaly_result_softmax = 1.0 - np.max(probs_tensor.numpy(), axis=0)
+
+    # Score entropy: entropia della distribuzione softmax pixel-wise.
+    anomaly_result_entropy = -torch.sum(probs_tensor * torch.log(probs_tensor), dim=0).numpy()
+
+    # Score RbA: stessa formula gia usata per la heatmap visuale.
+    anomaly_result_rba = -torch.sum(torch.tanh(logits_cpu), dim=0).numpy()
+
+    # Ritorno un dizionario, cosi il chiamante puo accumulare le metriche per nome.
+    return {
+        "logit": anomaly_result_logit,
+        "softmax": anomaly_result_softmax,
+        "entropy": anomaly_result_entropy,
+        "rba": anomaly_result_rba,
+    }
+
+
+def load_anomaly_ground_truth(image_path):
+    '''
+    Carica la maschera ground-truth OOD associata a una immagine.
+
+    Il path e la conversione della maschera sono gli stessi usati in
+    `evalAnomalyEoMT.py`, cosi le metriche finali restano confrontabili con lo
+    script di valutazione originale.
+    '''
+    # Ricavo il path della maschera a partire dal path dell'immagine.
+    path_gt = create_pathGT(image_path)
+
+    # Ridimensiono la maschera con nearest-neighbor, preservando gli ID delle classi.
+    mask = Image.open(path_gt)
+    mask = target_transform(mask)
+
+    # Converto la maschera nel formato binario OOD/IND usato da `eval_score`.
+    return create_oodgts(mask, path_gt)
+
+
+def create_empty_metric_storage():
+    '''
+    Prepara le liste in cui accumulare ground truth e anomaly score.
+
+    La struttura rispecchia le quattro metriche di `evalAnomalyEoMT.py`, ma usa
+    un dizionario per tenere il codice piu compatto e leggibile.
+    '''
+    # Ogni chiave contiene le mappe score delle immagini valutabili.
+    anomaly_scores = {
+        "logit": [],
+        "softmax": [],
+        "entropy": [],
+        "rba": [],
+    }
+
+    # La ground truth resta una lista separata, condivisa da tutte le metriche.
+    return {
+        "ood_gts": [],
+        "anomaly_scores": anomaly_scores,
+    }
+
+
+def add_image_to_metric_storage(image_path, anomaly_score_maps, metric_storage):
+    '''
+    Aggiunge una immagine alle liste usate per calcolare AUPRC e FPR@TPR95.
+
+    Come in `evalAnomalyEoMT.py`, le immagini senza pixel anomali vengono scartate
+    dalle metriche, perche non contribuiscono alla valutazione OOD.
+    '''
+    # Carico la ground truth OOD corrispondente all'immagine appena visualizzata.
+    ood_gts = load_anomaly_ground_truth(image_path)
+
+    # Mantengo lo stesso comportamento dello script originale: scarto immagini senza anomalie.
+    if 1 not in np.unique(ood_gts):
+        print("  Metriche saltate: la ground truth non contiene anomalie.")
+        return
+
+    # Accumulo la maschera ground truth una sola volta.
+    metric_storage["ood_gts"].append(ood_gts)
+
+    # Accumulo tutte le mappe score nello stesso ordine della ground truth.
+    for score_name, score_map in anomaly_score_maps.items():
+        metric_storage["anomaly_scores"][score_name].append(score_map)
+
+
+def print_anomaly_metric_results(metric_storage):
+    '''
+    Calcola e stampa AUPRC e FPR@TPR95 per tutte le anomaly score map.
+
+    L'output a terminale mantiene lo stesso formato di `evalAnomalyEoMT.py`: se
+    e stata valutata una sola immagine, i valori sono relativi solo a quella;
+    altrimenti sono calcolati sull'insieme di tutte le immagini accumulate.
+    '''
+    # Se nessuna immagine ha una ground truth valutabile, non posso calcolare le metriche.
+    if not metric_storage["ood_gts"]:
+        print("Metriche anomaly non calcolate: nessuna immagine contiene anomalie nella ground truth.")
+        return
+
+    # Calcolo le metriche con la stessa funzione condivisa dello script eval.
+    prc_auc_logit, fpr_logit = eval_score(
+        metric_storage["ood_gts"],
+        metric_storage["anomaly_scores"]["logit"],
+    )
+    prc_auc_softmax, fpr_softmax = eval_score(
+        metric_storage["ood_gts"],
+        metric_storage["anomaly_scores"]["softmax"],
+    )
+    prc_auc_entropy, fpr_entropy = eval_score(
+        metric_storage["ood_gts"],
+        metric_storage["anomaly_scores"]["entropy"],
+    )
+    prc_auc_rba, fpr_rba = eval_score(
+        metric_storage["ood_gts"],
+        metric_storage["anomaly_scores"]["rba"],
+    )
+
+    # Stampo i risultati nello stesso ordine e con le stesse etichette di `evalAnomalyEoMT.py`.
+    print(f"AUPRC logit score: {prc_auc_logit * 100.0}")
+    print(f"FPR@TPR95 logit: {fpr_logit * 100.0}")
+
+    print(f"AUPRC softmax score: {prc_auc_softmax * 100.0}")
+    print(f"FPR@TPR95 softmax: {fpr_softmax * 100.0}")
+
+    print(f"AUPRC entropy score: {prc_auc_entropy * 100.0}")
+    print(f"FPR@TPR95 entropy: {fpr_entropy * 100.0}")
+
+    print(f"AUPRC rba score: {prc_auc_rba * 100.0}")
+    print(f"FPR@TPR95 rba: {fpr_rba * 100.0}")
 
 
 def normalize_map(score_map):
@@ -583,13 +732,16 @@ def visualize_single_image(
             pixel_logits=pixel_logits,
         )
 
+    # Calcolo le quattro mappe anomaly da usare per le metriche finali.
+    anomaly_score_maps = compute_anomaly_score_maps(pixel_logits)
+
     # Libero memoria GPU dopo aver finito con l'immagine corrente.
     del pixel_logits
     if device == "cuda":
         torch.cuda.empty_cache()
 
-    # Ritorno i path generati per stamparli o usarli da altri script.
-    return output_paths
+    # Ritorno path e anomaly score, cosi il main puo stampare file e metriche aggregate.
+    return output_paths, anomaly_score_maps
 
 
 def main():
@@ -657,10 +809,13 @@ def main():
     if not image_paths:
         raise FileNotFoundError(f"Nessuna immagine trovata con input: {args.input}")
 
+    # Preparo gli accumulatori per calcolare le metriche anomaly alla fine del ciclo.
+    metric_storage = create_empty_metric_storage()
+
     # Processo una immagine alla volta per contenere la memoria GPU/CPU.
     for image_path in image_paths:
         print(f"Visualizzo: {image_path}")
-        output_paths = visualize_single_image(
+        output_paths, anomaly_score_maps = visualize_single_image(
             image_path=image_path,
             model=model,
             device=device,
@@ -670,12 +825,23 @@ def main():
             max_regions=args.max_regions,
         )
 
+        # Accumulo ground truth e score per calcolare AUPRC/FPR@TPR95 a fine ciclo.
+        add_image_to_metric_storage(
+            image_path=image_path,
+            anomaly_score_maps=anomaly_score_maps,
+            metric_storage=metric_storage,
+        )
+
         # Stampo i file creati, così è facile trovarli da terminale.
         if args.mode in ("rba", "both"):
             print(f"  RbA salvato in: {output_paths['rba']}")
         if args.mode in ("prediction", "both"):
             print(f"  Predizione salvata in: {output_paths['prediction']}")
             print(f"  Probabilità regioni salvate in: {output_paths['probabilities']}")
+
+
+    # A fine ciclo stampo le metriche aggregate, oppure quelle della singola immagine.
+    print_anomaly_metric_results(metric_storage)
 
 
 if __name__ == "__main__":
