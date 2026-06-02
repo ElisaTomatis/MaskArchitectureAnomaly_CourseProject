@@ -604,7 +604,7 @@ def main():
     parser.add_argument("--input", required=True, help="Path o glob delle immagini da visualizzare.")
     parser.add_argument(
         "--output-dir",
-        default="visualizations",
+        default="/content/drive/MyDrive/ml_anomaly_segmentation/visualizations",
         help="Cartella in cui salvare PNG e CSV prodotti.",
     )
     parser.add_argument(
@@ -638,7 +638,7 @@ def main():
     parser.add_argument(
         "--device",
         choices=["cpu", "cuda"],
-        default=None,
+        default="cpu",
         help="Device da usare. Se omesso, usa CUDA quando disponibile.",
     )
     args = parser.parse_args()
