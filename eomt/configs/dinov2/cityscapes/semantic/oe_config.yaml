@@ -1,5 +1,5 @@
 trainer:
-  max_epochs: 3
+  max_epochs: 5
   logger:
     class_path: lightning.pytorch.loggers.wandb.WandbLogger
     init_args:
@@ -12,7 +12,7 @@ model:
   init_args:
     lambda_rba: 0.1
     rba_alpha: 5.0
-    rba_reduction: sum
+    rba_reduction: mean
     freeze_heads_only: True
     attn_mask_annealing_enabled: True
     attn_mask_annealing_start_steps: [3317, 8292, 13268]
