@@ -22,7 +22,7 @@ class MaskClassificationSemantic(LightningModule):
         attn_mask_annealing_start_steps: Optional[list[int]] = None,
         attn_mask_annealing_end_steps: Optional[list[int]] = None,
         ignore_idx: int = 255,
-        lr: float = 1e-4,
+        lr: float = 3e-4,
         llrd: float = 0.8,
         llrd_l2_enabled: bool = True,
         lr_mult: float = 1.0,

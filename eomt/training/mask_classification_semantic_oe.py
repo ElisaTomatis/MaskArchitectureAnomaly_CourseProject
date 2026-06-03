@@ -232,8 +232,34 @@ class MaskClassificationSemanticOE(MaskClassificationSemantic):
             reduction=self.rba_reduction,
         )
 
-        # La loss finale e' la somma delle due componenti.
+        # La loss finale e' quella effettivamente ottimizzata: le tre loss
+        # standard EoMT gia' pesate piu' la RbA pesata da lambda_rba.
         total_loss = seg_loss + self.lambda_rba * rba_loss
         self.log("losses/train_rba_loss", rba_loss, sync_dist=True, prog_bar=True)
         self.log("losses/train_loss_total_oe", total_loss, sync_dist=True, prog_bar=True)
+        # Questi log hanno un solo punto per epoca: Lightning media i valori
+        # scalari osservati sui batch dell'epoca, producendo grafici piu'
+        # leggibili per il confronto tra iperparametri su WandB.
+        self.log(
+            "losses_epoch/train_loss_total_oe",
+            total_loss,
+            on_step=False,
+            on_epoch=True,
+            sync_dist=True,
+            prog_bar=True,
+        )
+        self.log(
+            "losses_epoch/train_rba_loss",
+            rba_loss,
+            on_step=False,
+            on_epoch=True,
+            sync_dist=True,
+        )
+        self.log(
+            "losses_epoch/train_loss_without_rba",
+            seg_loss,
+            on_step=False,
+            on_epoch=True,
+            sync_dist=True,
+        )
         return total_loss

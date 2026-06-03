@@ -54,6 +54,16 @@ def _find_model_checkpoint_callback(trainer) -> ModelCheckpoint | None:
     return None
 
 
+def _format_hparam_for_filename(value) -> str:
+    """
+    Converte un iperparametro in una stringa per i checkpoint.
+    """
+
+    if isinstance(value, float):
+        value = f"{value:.6g}"
+    return str(value).replace("-", "m").replace("+", "").replace(".", "p")
+
+
 _orig_single = _t.raise_unexpected_value
 
 
@@ -185,6 +195,18 @@ class LightningCLI(cli.LightningCLI):
             run_name = getattr(self.trainer.logger, "name", "default_run")
             checkpoint_dir = _default_run_root() / "checkpoints" / run_name
             checkpoint_callback.dirpath = str(checkpoint_dir)
+            # Rendiamo ogni checkpoint riconoscibile per gli iperparametri OE
+            # principali, evitando sovrascritture quando cambia il learning rate.
+            lr_tag = _format_hparam_for_filename(getattr(model, "lr", "na"))
+            lambda_oe_tag = _format_hparam_for_filename(
+                getattr(model, "lambda_rba", "na")
+            )
+            checkpoint_callback.filename = (
+                f"lr{lr_tag}-lambdaoe{lambda_oe_tag}-epoch{{epoch:03d}}-step{{step:06d}}"
+            )
+            checkpoint_callback.CHECKPOINT_NAME_LAST = (
+                f"last-lr{lr_tag}-lambdaoe{lambda_oe_tag}"
+            )
             checkpoint_callback.FILE_EXTENSION = ".ckpt"
 
         self.trainer.fit_loop.epoch_loop._should_check_val_fx = MethodType(
@@ -198,7 +220,10 @@ class LightningCLI(cli.LightningCLI):
         if not self.config[self.config["subcommand"]]["resume_disabled"]:
             checkpoint_callback = _find_model_checkpoint_callback(self.trainer)
             if checkpoint_callback is not None and checkpoint_callback.dirpath is not None:
-                last_checkpoint = Path(checkpoint_callback.dirpath) / "last.ckpt"
+                last_checkpoint = (
+                    Path(checkpoint_callback.dirpath)
+                    / f"{checkpoint_callback.CHECKPOINT_NAME_LAST}{checkpoint_callback.FILE_EXTENSION}"
+                )
                 if last_checkpoint.exists() and kwargs.get("ckpt_path") is None:
                     logging.info(f"Resuming from checkpoint: {last_checkpoint}")
                     kwargs["ckpt_path"] = str(last_checkpoint)
