@@ -12,6 +12,19 @@ from argparse import ArgumentParser
 from torchvision.transforms import Compose, Resize, ToTensor
 from functions import *
 
+"""
+Script ottimizzato per valutare temperature scaling su ERFNet.
+
+Rispetto a `evalAnomalyERFNetTemperature.py`, questo file evita di ripetere il
+forward pass del modello per ogni temperatura. La valutazione e' divisa in due
+fasi: prima esegue l'inferenza una sola volta per immagine e salva i logits su
+disco, poi ricarica quei logits per calcolare lo score MSP con diverse
+temperature.
+
+Questa strategia velocizza la ricerca della temperatura migliore per anomaly
+segmentation, mantenendo le stesse metriche finali: AuPRC e FPR@TPR95.
+"""
+
 seed = 42
 
 # general reproducibility
@@ -41,6 +54,25 @@ target_transform = Compose(
 
 
 def main():
+    """
+    Esegue la valutazione ottimizzata di MSP con temperature scaling.
+
+    La funzione legge gli argomenti da riga di comando, carica ERFNet con i pesi
+    specificati e prepara il file dei risultati. Nella prima fase scorre le
+    immagini indicate da `--input`, applica il modello una sola volta,
+    controlla la presenza di anomalie nella ground truth e salva su disco i
+    logits delle sole immagini valide nella cartella temporanea `temp_logits`.
+    In parallelo memorizza le maschere OoD e i percorsi validi.
+
+    Nella seconda fase costruisce il vettore di temperature, ricarica i logits
+    salvati per ogni immagine e calcola, per ciascuna temperatura, la softmax
+    calibrata e lo score MSP `1 - max(softmax)`. Gli score vengono confrontati
+    con le ground truth tramite `eval_score`, ottenendo AuPRC e FPR@TPR95.
+
+    Infine seleziona la temperatura migliore usando una misura combinata
+    `AuPRC - FPR + 1`, scrive i risultati in `results.txt` e rimuove la cartella
+    temporanea contenente i logits.
+    """
     parser = ArgumentParser()
     parser.add_argument(
         "--input",

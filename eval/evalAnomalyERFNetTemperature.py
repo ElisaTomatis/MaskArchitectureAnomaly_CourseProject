@@ -11,6 +11,20 @@ from argparse import ArgumentParser
 from torchvision.transforms import Compose, Resize, ToTensor
 from functions import *
 
+"""
+Script di valutazione anomaly segmentation con temperature scaling per ERFNet.
+
+Il file carica un modello ERFNet pre-addestrato e valuta lo score MSP
+(`1 - max(softmax)`) applicando diverse temperature ai logits prima della
+softmax. La temperature scaling modifica la confidenza della distribuzione di
+probabilita' e puo' migliorare la capacita' del modello di separare pixel
+in-distribution e pixel anomali/OoD.
+
+Per ogni temperatura vengono calcolate le metriche AuPRC e FPR95; lo script
+riporta anche la temperatura migliore secondo una misura combinata basata su
+AuPRC alto e FPR basso.
+"""
+
 seed = 42
 
 # general reproducibility
@@ -40,6 +54,21 @@ target_transform = Compose(
 
 
 def main():
+    """
+    Esegue la ricerca della temperatura per MSP su ERFNet.
+
+    La funzione legge gli argomenti da riga di comando, carica ERFNet con i
+    pesi specificati e prepara un vettore di temperature da testare. Per ogni
+    immagine indicata da `--input`, esegue il forward pass del modello una sola
+    volta e poi ricalcola la softmax dei logits per ciascun valore di temperatura. 
+    Da ogni softmax ricava lo score di anomalia MSP, definito come `1 - probabilita' massima`.
+
+    Le ground truth vengono recuperate con `create_pathGT`, ridimensionate e
+    convertite in maschere binarie OoD tramite `create_oodgts`. 
+    Le immagini che non contengono pixel anomali vengono ignorate. 
+    Al termine, per ogni temperatura, `eval_score` calcola AuPRC e FPR@TPR95
+    i risultati principali e la temperatura migliore vengono salvati in `results.txt`.
+    """
     parser = ArgumentParser()
     parser.add_argument(
         "--input",

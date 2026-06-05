@@ -3,6 +3,16 @@
 # Eduardo Romera
 #######################
 
+"""
+Script di valutazione della IoU per ERFNet su Cityscapes.
+
+Il file carica un modello ERFNet pre-addestrato, prepara il dataset Cityscapes
+con le trasformazioni necessarie, esegue l'inferenza sulle immagini del subset
+scelto e calcola la Intersection over Union media e per classe. La valutazione
+usa la classe `iouEval`, che accumula veri positivi, falsi positivi e falsi
+negativi lungo tutto il dataset.
+"""
+
 import torch
 import os
 import time
@@ -36,6 +46,24 @@ target_transform_cityscapes = Compose([
 ])
 
 def main(args):
+    
+    """
+    Esegue la valutazione IoU di ERFNet sul dataset indicato.
+
+    La funzione costruisce i percorsi del modello e dei pesi a partire dagli
+    argomenti da riga di comando, inizializza ERFNet, carica il checkpoint e
+    imposta il modello in modalita' valutazione. Successivamente crea un
+    `DataLoader` Cityscapes, esegue il forward pass su ogni batch e converte i
+    logits in predizioni di classe tramite `argmax`.
+
+    Per ogni batch aggiorna il valutatore `iouEvalVal` con predizioni e ground
+    truth. Al termine stampa il tempo totale di esecuzione, la IoU per ciascuna
+    classe Cityscapes e la mean IoU complessiva.
+
+    L'argomento `args` contiene le opzioni lette dal parser, tra cui directory
+    del dataset, checkpoint, subset da valutare, batch size, numero di worker e
+    scelta tra esecuzione su CPU o GPU.
+    """
 
     modelpath = args.loadDir + args.loadModel
     weightspath = args.loadDir + args.loadWeights

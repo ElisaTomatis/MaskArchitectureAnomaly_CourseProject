@@ -6,21 +6,57 @@
 import torch
 
 class iouEval:
+    """
+    Valutatore per il calcolo della Intersection over Union (IoU).
+
+    La classe accumula, batch dopo batch, i conteggi di veri positivi, falsi
+    positivi e falsi negativi per ogni classe semantica. A partire da questi
+    conteggi calcola poi la IoU media e la IoU per singola classe.
+
+    E' pensata per valutare modelli di semantic segmentation, come ERFNet, su
+    predizioni pixel-wise. Supporta sia tensori gia' in formato one-hot
+    (`batch_size x nClasses x H x W`) sia mappe di etichette con un solo canale
+    (`batch_size x 1 x H x W`), che vengono convertite internamente in one-hot.
+    """
 
     def __init__(self, nClasses, ignoreIndex=19):
+        """
+        Inizializza il valutatore IoU.
+
+        `nClasses` indica il numero totale di classi considerate. 
+        `ignoreIndex` indica l'indice della classe da ignorare durante la valutazione, 
+        ad esempio una classe void/unlabeled. Se l'indice da ignorare e' maggiore
+        del numero di classi disponibili, non viene ignorata nessuna classe.
+        """
         self.nClasses = nClasses
         self.ignoreIndex = ignoreIndex if nClasses>ignoreIndex else -1 #if ignoreIndex is larger than nClasses, consider no ignoreIndex
         self.reset()
 
     def reset (self):
+        """
+        Azzera i contatori interni usati per calcolare la IoU.
+
+        Crea tre vettori, uno per classe valutata, che accumulano veri
+        positivi (`tp`), falsi positivi (`fp`) e falsi negativi (`fn`). Se e'
+        presente una classe da ignorare, questa viene esclusa dai contatori.
+        """
         classes = self.nClasses if self.ignoreIndex==-1 else self.nClasses-1
         self.tp = torch.zeros(classes).double()
         self.fp = torch.zeros(classes).double()
         self.fn = torch.zeros(classes).double()        
 
     def addBatch(self, x, y):   #x=preds, y=targets
+        """
+        Aggiunge un batch di predizioni e ground truth alla valutazione.
+
+        `x` contiene le predizioni del modello,
+        `y` contiene le etichette ground truth. 
+        Entrambi possono essere mappe di classi a un canale oppure tensori one-hot. 
+        La funzione converte i tensori quando necessario, gestisce l'eventuale classe da ignorare e
+        aggiorna i conteggi cumulativi di veri positivi, falsi positivi e falsi negativi per ogni classe.
+        """
         #sizes should be "batch_size x nClasses x H x W"
-        
+                
         #print ("X is cuda: ", x.is_cuda)
         #print ("Y is cuda: ", y.is_cuda)
 
@@ -69,6 +105,13 @@ class iouEval:
         self.fn += fn.double().cpu()
 
     def getIoU(self):
+        """
+        Calcola la IoU media e la IoU per classe.
+
+        Per ogni classe usa la formula `IoU = TP / (TP + FP + FN)`. 
+        Il valore `1e-15` nel denominatore evita divisioni per zero. 
+        Restituisce una tupla composta da IoU media e vettore delle IoU per classe.
+        """
         num = self.tp
         den = self.tp + self.fp + self.fn + 1e-15
         iou = num / den
@@ -76,6 +119,13 @@ class iouEval:
 
 # Class for colors
 class colors:
+    """
+    Contenitore di codici ANSI per colorare l'output nel terminale.
+
+    Gli attributi della classe rappresentano sequenze di escape usate per
+    stampare testo colorato o formattato, ad esempio rosso, verde, grassetto o
+    sottolineato. `ENDC` serve a ripristinare il colore/formato predefinito.
+    """
     RED       = '\033[31;1m'
     GREEN     = '\033[32;1m'
     YELLOW    = '\033[33;1m'
@@ -88,6 +138,14 @@ class colors:
 
 # Colored value output if colorized flag is activated.
 def getColorEntry(val):
+    """
+    Restituisce il colore ANSI associato a un valore numerico di prestazione.
+
+    La funzione viene usata per rendere piu' leggibile l'output delle metriche:
+    valori bassi vengono colorati in rosso o giallo, valori intermedi in blu o
+    ciano e valori alti in verde. Se `val` non e' un numero float, viene
+    restituito direttamente il codice di reset `colors.ENDC`.
+    """
     if not isinstance(val, float):
         return colors.ENDC
     if (val < .20):

@@ -12,6 +12,21 @@ from argparse import ArgumentParser
 from torchvision.transforms import Compose, Resize, ToTensor
 from functions import *
 
+"""
+Script di valutazione anomaly segmentation per ERFNet.
+
+Il file carica un modello ERFNet pre-addestrato e lo applica a un insieme di
+immagini stradali contenenti possibili anomalie/OoD. Per ogni immagine calcola
+tre score post-hoc di anomalia a partire dai logits del modello:
+
+- Max Logit: usa `1 - max(logit)` come score di anomalia.
+- MSP: usa `1 - max(softmax)` per misurare la bassa confidenza del modello.
+- Max Entropy: usa l'entropia della distribuzione softmax.
+
+Le maschere ground truth vengono convertite in formato binario OoD tramite le
+utility di `functions.py`, poi gli score vengono valutati con AuPRC e FPR95.
+"""
+
 seed = 42
 
 # general reproducibility
@@ -41,6 +56,22 @@ target_transform = Compose(
 
 
 def main():
+    """
+    Esegue l'inferenza ERFNet e valuta gli score di anomalia.
+
+    La funzione legge gli argomenti da riga di comando, prepara le liste per
+    accumulare ground truth e score di anomalia, carica il modello ERFNet con i
+    pesi indicati e lo mette in modalita' valutazione. Per ogni immagine
+    individuata dal pattern `--input`, applica le trasformazioni di resize e
+    conversione a tensore, esegue il forward pass e calcola tre mappe di
+    anomalia: logit-based, softmax-based e entropy-based.
+
+    Per ogni immagine viene ricavato il percorso della ground truth con
+    `create_pathGT`, la maschera viene adattata alla risoluzione di valutazione
+    e convertita in maschera binaria OoD con `create_oodgts`. Le immagini senza
+    pixel anomali vengono saltate. Al termine, `eval_score` calcola AuPRC e
+    FPR@TPR95 per ciascun metodo; i risultati vengono stampati e salvati in `results.txt`.
+    """
     parser = ArgumentParser()
     parser.add_argument(
         "--input",
