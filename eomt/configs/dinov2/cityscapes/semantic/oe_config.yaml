@@ -31,6 +31,6 @@ data:
   class_path: datasets.cityscapes_semantic_oe.CityscapesSemanticOE
   init_args:
     coco_root: null
-    p_ood: 0.2
+    p_ood: 0.1
     coco_split: val2017
     ood_target_height_range: [80, 250]
