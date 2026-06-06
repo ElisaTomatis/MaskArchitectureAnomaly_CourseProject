@@ -15,6 +15,13 @@ from datasets.transforms import Transforms
 
 
 class CityscapesSemantic(LightningDataModule):
+    """
+    DataModule Lightning per Cityscapes in segmentazione semantica.
+
+    Costruisce dataset train e validation leggendo gli archivi ufficiali
+    Cityscapes, converte le label `id` nei rispettivi `train_id` e applica le
+    trasformazioni di training quando necessario.
+    """
     def __init__(
         self,
         path,
@@ -26,6 +33,19 @@ class CityscapesSemantic(LightningDataModule):
         scale_range=(0.5, 2.0),
         check_empty_targets=True,
     ) -> None:
+        """
+        Inizializza il DataModule Cityscapes semantico.
+
+        Args:
+            path: Cartella contenente gli zip Cityscapes.
+            num_workers: Numero di worker del DataLoader.
+            batch_size: Dimensione del batch.
+            img_size: Dimensione finale delle immagini.
+            num_classes: Numero di classi semantiche Cityscapes.
+            color_jitter_enabled: Abilita il jitter cromatico in training.
+            scale_range: Intervallo di scala per lo scale jitter.
+            check_empty_targets: Scarta immagini con target vuoti.
+        """
         super().__init__(
             path=path,
             batch_size=batch_size,
@@ -44,6 +64,17 @@ class CityscapesSemantic(LightningDataModule):
 
     @staticmethod
     def target_parser(target, **kwargs):
+        """
+        Converte una label Cityscapes in maschere binarie per classe.
+
+        Args:
+            target: Maschera label Cityscapes con id originali.
+            **kwargs: Parametri aggiuntivi non usati.
+
+        Returns:
+            Tupla `(masks, labels, is_crowd)` con maschere per classe valida,
+            train id corrispondenti e flag crowd sempre falsi.
+        """
         masks, labels = [], []
 
         for label_id in target[0].unique():
@@ -58,6 +89,15 @@ class CityscapesSemantic(LightningDataModule):
         return masks, labels, [False for _ in range(len(masks))]
 
     def setup(self, stage: Union[str, None] = None) -> LightningDataModule:
+        """
+        Crea dataset di training e validazione per Cityscapes.
+
+        Args:
+            stage: Stage Lightning opzionale.
+
+        Returns:
+            L'istanza corrente del DataModule.
+        """
         cityscapes_dataset_kwargs = {
             "img_suffix": ".png",
             "target_suffix": ".png",
@@ -83,6 +123,9 @@ class CityscapesSemantic(LightningDataModule):
         return self
 
     def train_dataloader(self):
+        """
+        Restituisce il DataLoader di training Cityscapes.
+        """
         return DataLoader(
             self.cityscapes_train_dataset,
             shuffle=True,
@@ -92,6 +135,9 @@ class CityscapesSemantic(LightningDataModule):
         )
 
     def val_dataloader(self):
+        """
+        Restituisce il DataLoader di validazione Cityscapes.
+        """
         return DataLoader(
             self.cityscapes_val_dataset,
             collate_fn=self.eval_collate,

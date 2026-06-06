@@ -150,6 +150,13 @@ CLASS_MAPPING = {
 
 
 class COCOPanoptic(LightningDataModule):
+    """
+    DataModule Lightning per COCO panoptic segmentation.
+
+    Legge immagini COCO, mappe panottiche RGB e JSON di annotazioni; converte
+    ogni segmento panottico in maschera binaria e rimappa le categorie COCO in
+    indici contigui compatibili con EoMT.
+    """
     def __init__(
         self,
         path,
@@ -162,6 +169,20 @@ class COCOPanoptic(LightningDataModule):
         scale_range=(0.1, 2.0),
         check_empty_targets=True,
     ) -> None:
+        """
+        Inizializza il DataModule COCO panoptic.
+
+        Args:
+            path: Cartella contenente zip immagini e annotazioni panottiche.
+            stuff_classes: Classi stuff usate dal task panottico.
+            num_workers: Numero di worker del DataLoader.
+            batch_size: Dimensione del batch.
+            img_size: Dimensione finale delle immagini.
+            num_classes: Numero totale di classi COCO panoptic.
+            color_jitter_enabled: Abilita il jitter cromatico in training.
+            scale_range: Intervallo di scala per lo scale jitter.
+            check_empty_targets: Scarta immagini senza segmenti validi.
+        """
         super().__init__(
             path=path,
             batch_size=batch_size,
@@ -180,6 +201,23 @@ class COCOPanoptic(LightningDataModule):
 
     @staticmethod
     def target_parser(target, labels_by_id, is_crowd_by_id, **kwargs):
+        """
+        Converte una mappa panottica COCO RGB in maschere per segmento.
+
+        Il colore RGB della mappa panottica viene decodificato nell'id segmento
+        COCO; ogni segmento valido viene trasformato in maschera booleana e
+        associato alla categoria rimappata.
+
+        Args:
+            target: Mappa panottica RGB caricata come tensore.
+            labels_by_id: Categoria COCO associata a ogni segmento.
+            is_crowd_by_id: Flag crowd associato a ogni segmento.
+            **kwargs: Parametri aggiuntivi non usati.
+
+        Returns:
+            Tupla `(masks, labels, is_crowd)` con maschere, classi rimappate e
+            flag crowd.
+        """
         target = target[0, :, :] + target[1, :, :] * 256 + target[2, :, :] * 256**2
 
         masks, labels, is_crowd = [], [], []
@@ -199,6 +237,15 @@ class COCOPanoptic(LightningDataModule):
         return masks, labels, is_crowd
 
     def setup(self, stage: Union[str, None] = None) -> LightningDataModule:
+        """
+        Crea dataset COCO panottici di training e validazione.
+
+        Args:
+            stage: Stage Lightning opzionale.
+
+        Returns:
+            L'istanza corrente del DataModule.
+        """
         dataset_kwargs = {
             "img_suffix": ".jpg",
             "target_suffix": ".png",
@@ -228,6 +275,9 @@ class COCOPanoptic(LightningDataModule):
         return self
 
     def train_dataloader(self):
+        """
+        Restituisce il DataLoader di training COCO panoptic.
+        """
         return DataLoader(
             self.train_dataset,
             shuffle=True,
@@ -237,6 +287,9 @@ class COCOPanoptic(LightningDataModule):
         )
 
     def val_dataloader(self):
+        """
+        Restituisce il DataLoader di validazione COCO panoptic.
+        """
         return DataLoader(
             self.val_dataset,
             collate_fn=self.eval_collate,

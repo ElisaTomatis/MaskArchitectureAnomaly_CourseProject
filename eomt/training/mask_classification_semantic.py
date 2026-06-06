@@ -13,6 +13,8 @@ from training.lightning_module import LightningModule
 
 
 class MaskClassificationSemantic(LightningModule):
+    """Modulo Lightning per addestramento e validazione di semantic segmentation."""
+
     def __init__(
         self,
         network: nn.Module,
@@ -42,6 +44,8 @@ class MaskClassificationSemantic(LightningModule):
         delta_weights: bool = False,
         load_ckpt_class_head: bool = True,
     ):
+        """Inizializza modello, loss, soglie di valutazione e metrica mIoU."""
+
         super().__init__(
             network=network,
             img_size=img_size,
@@ -87,6 +91,8 @@ class MaskClassificationSemantic(LightningModule):
         batch_idx=None,
         log_prefix=None,
     ):
+        """Esegue la validazione semantic usando crop a finestra e aggiorna la mIoU."""
+
         imgs, targets = batch
 
         img_sizes = [img.shape[-2:] for img in imgs]
@@ -110,7 +116,11 @@ class MaskClassificationSemantic(LightningModule):
                 )
 
     def on_validation_epoch_end(self):
+        """Calcola e registra le metriche semantic alla fine dell'epoca di validazione."""
+
         self._on_eval_epoch_end_semantic("val")
 
     def on_validation_end(self):
+        """Stampa il riepilogo finale della mIoU di validazione."""
+
         self._on_eval_end_semantic("val")

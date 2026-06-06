@@ -19,6 +19,14 @@ from torchvision.transforms.v2 import functional as F
 
 
 class Dataset(torch.utils.data.Dataset):
+    """
+    Dataset generico per leggere immagini e target direttamente da archivi zip.
+
+    La classe centralizza la logica comune ai dataset ADE20K, COCO e
+    Cityscapes: apre gli zip in modo compatibile con i worker del DataLoader,
+    associa immagini e annotazioni, filtra target vuoti e restituisce immagini
+    e maschere nel formato richiesto dal modello EoMT.
+    """
     def __init__(
         self,
         zip_path: Path,
@@ -39,6 +47,34 @@ class Dataset(torch.utils.data.Dataset):
         target_instance_folder_path_in_zip: Path = Path("./"),
         annotations_json_path_in_zip: Optional[Path] = None,
     ):
+        """
+        Inizializza il dataset leggendo metadati, percorsi e annotazioni.
+
+        Args:
+            zip_path: Archivio zip contenente le immagini.
+            img_suffix: Estensione delle immagini da considerare.
+            target_parser: Funzione che converte target grezzi in maschere,
+                label e flag crowd.
+            check_empty_targets: Se `True`, scarta campioni senza annotazioni
+                utili.
+            transforms: Trasformazioni opzionali applicate a immagine e target.
+            only_annotations_json: Se `True`, usa solo il JSON di annotazioni
+                senza cercare una maschera target separata.
+            target_suffix: Estensione dei file target.
+            stuff_classes: Lista opzionale di classi stuff per task panottici.
+            img_stem_suffix: Suffisso del nome immagine da sostituire.
+            target_stem_suffix: Suffisso del nome target corrispondente.
+            target_zip_path: Archivio zip contenente le annotazioni.
+            target_zip_path_in_zip: Percorso di uno zip annidato dentro lo zip
+                delle annotazioni.
+            target_instance_zip_path: Archivio con maschere instance-level.
+            img_folder_path_in_zip: Cartella delle immagini dentro lo zip.
+            target_folder_path_in_zip: Cartella dei target dentro lo zip.
+            target_instance_folder_path_in_zip: Cartella delle maschere
+                instance-level dentro lo zip.
+            annotations_json_path_in_zip: Percorso del JSON di annotazioni
+                dentro lo zip target.
+        """
         self.zip_path = zip_path
         self.target_parser = target_parser
         self.transforms = transforms
@@ -170,6 +206,16 @@ class Dataset(torch.utils.data.Dataset):
                 self.targets_instance.append(target_instance_filename)
 
     def __getitem__(self, index: int):
+        """
+        Carica un campione e lo converte nel formato usato da EoMT.
+
+        Args:
+            index: Indice del campione da leggere.
+
+        Returns:
+            Tupla `(img, target)` dove `img` e una `tv_tensors.Image` RGB e
+            `target` contiene `masks`, `labels` e `is_crowd`.
+        """
         img_zip, target_zip, target_instance_zip = self._load_zips()
 
         with img_zip.open(self.imgs[index]) as img:
@@ -221,6 +267,16 @@ class Dataset(torch.utils.data.Dataset):
     def _load_zips(
         self,
     ) -> Tuple[zipfile.ZipFile, zipfile.ZipFile, Optional[zipfile.ZipFile]]:
+        """
+        Apre e riusa gli archivi zip in modo separato per ogni worker.
+
+        Ogni worker del DataLoader mantiene i propri handle agli zip, evitando
+        condivisioni non sicure tra processi. Supporta anche il caso di uno zip
+        di target annidato dentro un altro archivio.
+
+        Returns:
+            Tupla con zip immagini, zip target e zip instance opzionale.
+        """
         worker = get_worker_info()
         worker = worker.id if worker else None
 
@@ -261,6 +317,15 @@ class Dataset(torch.utils.data.Dataset):
 
     @staticmethod
     def _sort_key(m: zipfile.ZipInfo):
+        """
+        Produce una chiave di ordinamento stabile per i membri dello zip.
+
+        Args:
+            m: Informazioni di un membro dello zip.
+
+        Returns:
+            Tupla basata sul primo numero nel nome file e sul nome completo.
+        """
         match = re.search(r"\d+", m.filename)
 
         return (int(match.group()) if match else float("inf"), m.filename)
@@ -272,6 +337,19 @@ class Dataset(torch.utils.data.Dataset):
         img_stem_suffix: str,
         img_suffix: str,
     ):
+        """
+        Controlla se un membro dello zip e una immagine valida del dataset.
+
+        Args:
+            img_info: Membro dello zip da controllare.
+            img_folder_path_in_zip: Cartella attesa delle immagini.
+            img_stem_suffix: Suffisso richiesto nel nome base.
+            img_suffix: Estensione richiesta.
+
+        Returns:
+            `True` se il membro appartiene alla cartella corretta, ha il nome
+            atteso e non e una directory.
+        """
         return (
             Path(img_info.filename).is_relative_to(img_folder_path_in_zip)
             and img_info.filename.endswith(img_stem_suffix + img_suffix)
@@ -279,9 +357,21 @@ class Dataset(torch.utils.data.Dataset):
         )
 
     def __len__(self):
+        """
+        Restituisce il numero di immagini valide trovate.
+
+        Returns:
+            Lunghezza del dataset.
+        """
         return len(self.imgs)
 
     def close(self):
+        """
+        Chiude tutti gli handle agli archivi zip aperti.
+
+        Returns:
+            None.
+        """
         if self.zip is not None:
             for item in self.zip.values():
                 item.close()
@@ -298,9 +388,21 @@ class Dataset(torch.utils.data.Dataset):
             self.target_instance_zip = None
 
     def __del__(self):
+        """
+        Chiude gli archivi quando l'istanza viene eliminata.
+        """
         self.close()
 
     def __getstate__(self):
+        """
+        Prepara lo stato per la serializzazione nei worker del DataLoader.
+
+        Gli handle agli zip non sono serializzabili, quindi vengono rimossi e
+        riaperti nel worker quando necessario.
+
+        Returns:
+            Dizionario di stato serializzabile.
+        """
         state = self.__dict__.copy()
         state["zip"] = None
         state["target_zip"] = None

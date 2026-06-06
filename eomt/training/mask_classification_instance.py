@@ -17,6 +17,8 @@ from training.lightning_module import LightningModule
 
 
 class MaskClassificationInstance(LightningModule):
+    """Modulo Lightning per addestramento e validazione di instance segmentation."""
+
     def __init__(
         self,
         network: nn.Module,
@@ -46,6 +48,8 @@ class MaskClassificationInstance(LightningModule):
         delta_weights: bool = False,
         load_ckpt_class_head: bool = True,
     ):
+        """Inizializza modello, loss, soglie di inferenza e metrica mAP per istanze."""
+
         super().__init__(
             network=network,
             img_size=img_size,
@@ -91,6 +95,8 @@ class MaskClassificationInstance(LightningModule):
         batch_idx=None,
         log_prefix=None,
     ):
+        """Converte le query in maschere di istanza e aggiorna la metrica mAP."""
+
         imgs, targets = batch
 
         img_sizes = [img.shape[-2:] for img in imgs]
@@ -147,7 +153,11 @@ class MaskClassificationInstance(LightningModule):
             self.update_metrics_instance(preds, targets, i)
 
     def on_validation_epoch_end(self):
+        """Calcola e registra le metriche instance alla fine dell'epoca di validazione."""
+
         self._on_eval_epoch_end_instance("val")
 
     def on_validation_end(self):
+        """Stampa il riepilogo finale delle metriche mAP di validazione."""
+
         self._on_eval_end_instance("val")

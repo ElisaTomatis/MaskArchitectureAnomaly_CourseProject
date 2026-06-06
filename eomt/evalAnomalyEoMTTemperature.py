@@ -13,6 +13,14 @@ from PIL import Image
 from torchvision.transforms import Compose, Resize, ToTensor
 from functions import *
 
+"""
+Valutazione anomaly detection di EoMT con temperature scaling.
+
+Lo script testa diversi valori di temperatura applicati alle logits prima del
+softmax. Per ogni temperatura calcola lo score di anomalia come `1 - max
+softmax`, valuta AUPRC e FPR@TPR95 e seleziona la temperatura con il miglior
+compromesso tra alta AUPRC e basso FPR.
+"""
 
 IGNORE_INDEX = 255
 
@@ -27,6 +35,22 @@ target_transform = Compose([
 
 
 def main():
+    """
+    Cerca la temperatura migliore per lo score softmax di anomaly detection.
+
+    La funzione carica il modello EoMT, scorre le immagini indicate da
+    `--input`, calcola le logits e genera una lista di anomaly score per ogni
+    temperatura candidata. Dopo aver raccolto le ground truth con anomalie,
+    valuta ciascuna temperatura e salva in `results.txt` i risultati principali
+    e la temperatura migliore.
+
+    Args:
+        None. Gli argomenti vengono letti da `ArgumentParser`.
+
+    Returns:
+        None. I risultati vengono stampati a schermo e scritti in
+        `results.txt`.
+    """
     parser = ArgumentParser()
     parser.add_argument("--input")  
     args = parser.parse_args()

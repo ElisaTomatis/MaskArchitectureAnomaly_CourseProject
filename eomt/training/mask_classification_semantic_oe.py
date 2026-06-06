@@ -75,6 +75,8 @@ class MaskClassificationSemanticOE(MaskClassificationSemantic):
         freeze_heads_only: bool = True,
         **kwargs,
     ) -> None:
+        """Inizializza la variante OE e, se richiesto, congela tutto tranne gli head."""
+
         # Costruiamo la classe base che contiene modello, loss e metriche.
         super().__init__(*args, **kwargs)
         self.lambda_rba = lambda_rba

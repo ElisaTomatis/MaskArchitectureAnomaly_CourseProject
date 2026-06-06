@@ -15,6 +15,12 @@ from typing import Any, Union
 
 
 class Transforms(nn.Module):
+    """
+    Pipeline di data augmentation per immagini e maschere di segmentazione.
+
+    Applica jitter cromatico opzionale, flip orizzontale, scale jitter, padding
+    e crop casuale, mantenendo sincronizzate immagine e maschere del target.
+    """
     def __init__(
         self,
         img_size: tuple[int, int],
@@ -25,6 +31,19 @@ class Transforms(nn.Module):
         saturation_factor: float = 0.5,
         max_hue_delta: int = 18,
     ):
+        """
+        Configura le trasformazioni usate in training.
+
+        Args:
+            img_size: Dimensione finale desiderata `(H, W)`.
+            color_jitter_enabled: Abilita o disabilita il jitter cromatico.
+            scale_range: Intervallo di scala usato da `ScaleJitter`.
+            max_brightness_delta: Massima variazione di luminosita in scala
+                0-255.
+            max_contrast_factor: Massima variazione del contrasto.
+            saturation_factor: Massima variazione della saturazione.
+            max_hue_delta: Massima variazione di hue in gradi.
+        """
         super().__init__()
 
         self.img_size = img_size
@@ -39,9 +58,22 @@ class Transforms(nn.Module):
         self.random_crop = T.RandomCrop(img_size)
 
     def _random_factor(self, factor: float, center: float = 1.0):
+        """
+        Campiona un fattore casuale intorno a un valore centrale.
+
+        Args:
+            factor: Ampiezza dell'intervallo di campionamento.
+            center: Valore centrale dell'intervallo.
+
+        Returns:
+            Numero float campionato uniformemente.
+        """
         return torch.empty(1).uniform_(center - factor, center + factor).item()
 
     def _brightness(self, img):
+        """
+        Applica casualmente una variazione di luminosita.
+        """
         if torch.rand(()) < 0.5:
             img = F.adjust_brightness(
                 img, self._random_factor(self.max_brightness_factor)
@@ -50,12 +82,18 @@ class Transforms(nn.Module):
         return img
 
     def _contrast(self, img):
+        """
+        Applica casualmente una variazione di contrasto.
+        """
         if torch.rand(()) < 0.5:
             img = F.adjust_contrast(img, self._random_factor(self.max_contrast_factor))
 
         return img
 
     def _saturation_and_hue(self, img):
+        """
+        Applica casualmente variazioni di saturazione e tonalita.
+        """
         if torch.rand(()) < 0.5:
             img = F.adjust_saturation(
                 img, self._random_factor(self.max_saturation_factor)
@@ -67,6 +105,16 @@ class Transforms(nn.Module):
         return img
 
     def color_jitter(self, img):
+        """
+        Applica il jitter cromatico, se abilitato.
+
+        Args:
+            img: Immagine di input.
+
+        Returns:
+            Immagine eventualmente modificata in luminosita, contrasto,
+            saturazione e hue.
+        """
         if not self.color_jitter_enabled:
             return img
 
@@ -84,6 +132,16 @@ class Transforms(nn.Module):
     def pad(
         self, img: Tensor, target: dict[str, Any]
     ) -> tuple[Tensor, dict[str, Union[Tensor, TVTensor]]]:
+        """
+        Applica padding a immagine e maschere fino alla dimensione target.
+
+        Args:
+            img: Tensore immagine.
+            target: Dizionario target contenente almeno `masks`.
+
+        Returns:
+            Immagine e target con maschere paddate.
+        """
         pad_h = max(0, self.img_size[-2] - img.shape[-2])
         pad_w = max(0, self.img_size[-1] - img.shape[-1])
         padding = [0, 0, pad_w, pad_h]
@@ -94,11 +152,35 @@ class Transforms(nn.Module):
         return img, target
 
     def _filter(self, target: dict[str, Union[Tensor, TVTensor]], keep: Tensor) -> dict:
+        """
+        Filtra tutte le voci del target usando la stessa maschera booleana.
+
+        Args:
+            target: Dizionario con campi indicizzati per istanza.
+            keep: Maschera booleana delle istanze da mantenere.
+
+        Returns:
+            Nuovo dizionario target con solo le istanze selezionate.
+        """
         return {k: wrap(v[keep], like=v) for k, v in target.items()}
 
     def forward(
         self, img: Tensor, target: dict[str, Union[Tensor, TVTensor]]
     ) -> tuple[Tensor, dict[str, Union[Tensor, TVTensor]]]:
+        """
+        Applica l'intera pipeline di augmentation a un campione.
+
+        Le istanze crowd vengono rimosse prima delle trasformazioni. Dopo il
+        crop vengono eliminate le maschere vuote; se nessuna maschera resta
+        valida, il campione viene ritrasformato a partire dall'originale.
+
+        Args:
+            img: Immagine di input.
+            target: Target con maschere, label e flag crowd.
+
+        Returns:
+            Immagine e target trasformati.
+        """
         img_orig, target_orig = img, target
 
         target = self._filter(target, ~target["is_crowd"])

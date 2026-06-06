@@ -9,6 +9,19 @@ import torch
 from PIL import Image
 
 def colormap_cityscapes(n):
+    """
+    Crea la palette RGB delle classi Cityscapes.
+
+    I primi 20 colori corrispondono alle classi Cityscapes usate nella
+    segmentazione semantica; eventuali righe aggiuntive restano inizializzate a
+    zero.
+
+    Args:
+        n: Numero di colori da includere nella colormap.
+
+    Returns:
+        Array NumPy `[n, 3]` con valori RGB uint8.
+    """
     cmap=np.zeros([n, 3]).astype(np.uint8)
     cmap[0,:] = np.array([128, 64,128])
     cmap[1,:] = np.array([244, 35,232])
@@ -38,6 +51,19 @@ def colormap_cityscapes(n):
 
 
 def colormap(n):
+    """
+    Genera una colormap generica tramite codifica bitwise degli indici.
+
+    Questa funzione costruisce colori distinti per classi diverse distribuendo
+    i bit dell'indice sui canali RGB, una tecnica comune nelle visualizzazioni
+    di segmentazione.
+
+    Args:
+        n: Numero di colori da generare.
+
+    Returns:
+        Array NumPy `[n, 3]` con valori RGB uint8.
+    """
     cmap=np.zeros([n, 3]).astype(np.uint8)
 
     for i in np.arange(n):
@@ -53,32 +79,88 @@ def colormap(n):
     return cmap
 
 class Relabel:
+    """
+    Trasformazione che sostituisce un'etichetta con un nuovo valore.
+
+    Viene usata, ad esempio, per rimappare l'etichetta `255` di ignore al valore
+    della classe ignore usata durante la valutazione IoU.
+    """
 
     def __init__(self, olabel, nlabel):
+        """
+        Salva vecchia e nuova etichetta per la rimappatura.
+
+        Args:
+            olabel: Valore originale da sostituire.
+            nlabel: Nuovo valore da assegnare.
+        """
         self.olabel = olabel
         self.nlabel = nlabel
 
     def __call__(self, tensor):
+        """
+        Applica la rimappatura a un tensore di label.
+
+        Args:
+            tensor: Tensore `LongTensor` o `ByteTensor` contenente indici di
+                classe.
+
+        Returns:
+            Lo stesso tensore, modificato in-place con la nuova etichetta.
+        """
         assert isinstance(tensor, torch.LongTensor) or isinstance(tensor, torch.ByteTensor) , 'tensor needs to be LongTensor'
         tensor[tensor == self.olabel] = self.nlabel
         return tensor
 
 
 class ToLabel:
+    """
+    Trasformazione che converte una label PIL in tensore di indici di classe.
+    """
 
     def __call__(self, image):
+        """
+        Converte una immagine di label in tensore `[1, H, W]`.
+
+        Args:
+            image: Immagine PIL contenente indici di classe.
+
+        Returns:
+            Tensore `long` con una dimensione canale aggiunta.
+        """
         return torch.from_numpy(np.array(image)).long().unsqueeze(0)
 
 
 class Colorize:
+    """
+    Trasformazione che converte una maschera di classi in immagine RGB.
+
+    Usa la colormap Cityscapes per associare a ogni indice di classe il colore
+    corrispondente, utile per visualizzare predizioni o ground truth.
+    """
 
     def __init__(self, n=22):
+        """
+        Prepara la colormap da usare per la colorizzazione.
+
+        Args:
+            n: Numero di classi/colori da mantenere nella palette.
+        """
         #self.cmap = colormap(256)
         self.cmap = colormap_cityscapes(256)
         self.cmap[n] = self.cmap[-1]
         self.cmap = torch.from_numpy(self.cmap[:n])
 
     def __call__(self, gray_image):
+        """
+        Applica la colormap a una maschera di label.
+
+        Args:
+            gray_image: Tensore `[1, H, W]` contenente indici di classe.
+
+        Returns:
+            Tensore RGB `ByteTensor` con shape `[3, H, W]`.
+        """
         size = gray_image.size()
         color_image = torch.ByteTensor(3, size[1], size[2]).fill_(0)
 

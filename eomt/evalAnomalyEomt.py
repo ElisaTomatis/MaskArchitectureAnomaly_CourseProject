@@ -12,6 +12,15 @@ from PIL import Image
 from torchvision.transforms import Compose, Resize, ToTensor
 from functions import *
 
+"""
+Valutazione anomaly detection di EoMT su dataset con maschere OoD.
+
+Lo script carica un modello EoMT addestrato su Cityscapes, esegue inferenza
+sulle immagini passate tramite `--input` e confronta diverse strategie di
+anomaly score: logit, softmax, entropia e RBA. Per ogni strategia calcola AUPRC
+e FPR@TPR95 usando le ground truth rimappate in formato ID/OoD.
+"""
+
 IGNORE_INDEX = 255
 
 input_transform = Compose([
@@ -25,6 +34,23 @@ target_transform = Compose([
 
 
 def main():
+    """
+    Esegue la valutazione anomaly detection con piu punteggi di anomalia.
+
+    La funzione legge il pattern di immagini da linea di comando, carica
+    configurazione e pesi del modello, calcola le logits per ogni immagine e
+    genera quattro mappe di anomaly score: massimo logit inverso, massimo
+    softmax inverso, entropia della distribuzione softmax e score RBA. Le
+    immagini senza pixel OoD vengono ignorate; sulle rimanenti vengono calcolati
+    AUPRC e FPR@TPR95.
+
+    Args:
+        None. Gli argomenti vengono letti da `ArgumentParser`.
+
+    Returns:
+        None. I risultati vengono stampati a schermo e scritti in
+        `results.txt`.
+    """
     parser = ArgumentParser()
     parser.add_argument("--input")  
     args = parser.parse_args()

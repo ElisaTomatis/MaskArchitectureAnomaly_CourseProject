@@ -121,6 +121,13 @@ INSTANCE_MAPPING = {
 
 
 class ADE20KPanoptic(LightningDataModule):
+    """
+    DataModule Lightning per ADE20K in segmentazione panottica.
+
+    Combina maschere semantiche e maschere instance-level: le classi stuff sono
+    ricavate dalla label semantica, mentre le istanze thing sono estratte dalla
+    mappa instance e rimappate negli indici di classe usati dal modello.
+    """
     def __init__(
         self,
         path,
@@ -133,6 +140,20 @@ class ADE20KPanoptic(LightningDataModule):
         scale_range=(0.1, 2.0),
         check_empty_targets=True,
     ) -> None:
+        """
+        Inizializza il DataModule panottico ADE20K.
+
+        Args:
+            path: Cartella contenente gli archivi ADE20K.
+            stuff_classes: Classi trattate come regioni stuff.
+            num_workers: Numero di worker del DataLoader.
+            batch_size: Dimensione del batch.
+            img_size: Dimensione finale delle immagini.
+            num_classes: Numero totale di classi.
+            color_jitter_enabled: Abilita il jitter cromatico in training.
+            scale_range: Intervallo di scala per lo scale jitter.
+            check_empty_targets: Scarta immagini con target vuoti.
+        """
         super().__init__(
             path=path,
             batch_size=batch_size,
@@ -152,6 +173,19 @@ class ADE20KPanoptic(LightningDataModule):
 
     @staticmethod
     def target_parser(target, target_instance, stuff_classes, **kwargs):
+        """
+        Converte target ADE20K panottici in maschere e label.
+
+        Args:
+            target: Maschera semantica ADE20K.
+            target_instance: Maschera instance-level ADE20K.
+            stuff_classes: Classi da trattare come stuff.
+            **kwargs: Parametri aggiuntivi non usati.
+
+        Returns:
+            Tupla `(masks, labels, is_crowd)` con regioni stuff e istanze thing
+            rimappate nel formato atteso da EoMT.
+        """
         masks, labels = [], []
 
         for label_id in target[0].unique():
@@ -181,6 +215,15 @@ class ADE20KPanoptic(LightningDataModule):
         return masks, labels, [False for _ in range(len(masks))]
 
     def setup(self, stage: Union[str, None] = None) -> LightningDataModule:
+        """
+        Crea dataset ADE20K panottici di training e validazione.
+
+        Args:
+            stage: Stage Lightning opzionale.
+
+        Returns:
+            L'istanza corrente del DataModule.
+        """
         dataset_kwargs = {
             "img_suffix": ".jpg",
             "target_suffix": ".png",
@@ -214,6 +257,9 @@ class ADE20KPanoptic(LightningDataModule):
         return self
 
     def train_dataloader(self):
+        """
+        Restituisce il DataLoader di training ADE20K panottico.
+        """
         dataset = self.train_dataset
 
         return DataLoader(
@@ -225,6 +271,9 @@ class ADE20KPanoptic(LightningDataModule):
         )
 
     def val_dataloader(self):
+        """
+        Restituisce il DataLoader di validazione ADE20K panottico.
+        """
         return DataLoader(
             self.val_dataset,
             collate_fn=self.eval_collate,

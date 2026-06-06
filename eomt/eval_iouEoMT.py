@@ -36,6 +36,22 @@ target_transform_cityscapes = Compose([
 ])
 
 def main(args):
+    """
+    Valuta un modello EoMT su Cityscapes calcolando mean IoU e IoU per classe.
+
+    La funzione carica configurazione e pesi del modello, costruisce il
+    DataLoader Cityscapes con le trasformazioni definite nel file, esegue
+    inferenza su ogni immagine e accumula le statistiche IoU tramite
+    `iouEval`. Alla fine stampa il tempo totale, la IoU di ogni classe e la
+    mean IoU.
+
+    Args:
+        args: Argomenti da linea di comando, inclusi percorso dataset, subset,
+            batch size, numero di worker e flag CPU.
+
+    Returns:
+        None.
+    """
     
     seed_everything(0, verbose=False)
 

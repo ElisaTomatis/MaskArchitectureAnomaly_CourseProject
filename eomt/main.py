@@ -7,6 +7,7 @@
 # ---------------------------------------------------------------
 
 
+
 import jsonargparse._typehints as _t
 import os
 from types import MethodType
@@ -34,7 +35,14 @@ os.environ["TORCH_LOGS"] = "-dynamo"
 
 def _default_run_root() -> Path:
     """
-    Usa Drive su Colab se disponibile, altrimenti una cartella locale.
+    Determina la cartella radice in cui salvare output e checkpoint.
+
+    Se il codice viene eseguito in Google Colab e il Drive risulta montato,
+    utilizza una directory dedicata all'interno di Drive. In caso contrario
+    usa una cartella locale nella directory corrente.
+
+    Returns:
+        Path della directory radice per run e checkpoint.
     """
 
     colab_drive = Path("/content/drive/MyDrive")
@@ -45,7 +53,13 @@ def _default_run_root() -> Path:
 
 def _find_model_checkpoint_callback(trainer) -> ModelCheckpoint | None:
     """
-    Cerca il callback ModelCheckpoint tra quelli registrati dal trainer.
+    Cerca il callback ModelCheckpoint registrato nel trainer.
+
+    Args:
+        trainer: Istanza del trainer Lightning.
+
+    Returns:
+        Il callback ModelCheckpoint se presente, altrimenti None.
     """
 
     for callback in trainer.callbacks:
@@ -56,7 +70,16 @@ def _find_model_checkpoint_callback(trainer) -> ModelCheckpoint | None:
 
 def _format_hparam_for_filename(value) -> str:
     """
-    Converte un iperparametro in una stringa per i checkpoint.
+    Converte un iperparametro in una stringa sicura da usare nei nomi file.
+
+    I caratteri che possono creare problemi nei nomi dei checkpoint vengono
+    sostituiti con rappresentazioni compatibili.
+
+    Args:
+        value: Valore dell'iperparametro.
+
+    Returns:
+        Stringa utilizzabile all'interno di un nome file.
     """
 
     if isinstance(value, float):
@@ -68,6 +91,21 @@ _orig_single = _t.raise_unexpected_value
 
 
 def _raise_single(*args, exception=None, **kwargs):
+    """
+    Propaga l'eccezione originale prodotta da jsonargparse.
+
+    Questa patch evita che alcuni errori di validazione dei tipi vengano
+    sostituiti da messaggi meno informativi.
+
+    Args:
+        *args: Argomenti inoltrati alla funzione originale.
+        exception: Eccezione eventualmente prodotta dal parser.
+        **kwargs: Argomenti keyword inoltrati alla funzione originale.
+
+    Returns:
+        Risultato della funzione originale quando non viene sollevata
+        alcuna eccezione.
+    """
     if isinstance(exception, Exception):
         raise exception
     return _orig_single(*args, exception=exception, **kwargs)
@@ -77,6 +115,20 @@ _orig_union = _t.raise_union_unexpected_value
 
 
 def _raise_union(subtypes, val, vals):
+    """
+    Propaga l'errore più specifico durante la validazione di tipi union.
+
+    Quando jsonargparse prova più sottotipi, questa funzione restituisce
+    l'eccezione più informativa disponibile.
+
+    Args:
+        subtypes: Tipi ammessi dalla union.
+        val: Valore da validare.
+        vals: Risultati o eccezioni dei tentativi di validazione.
+
+    Returns:
+        Risultato della funzione originale se non sono presenti eccezioni.
+    """
     for e in reversed(vals):
         if isinstance(e, Exception):
             raise e
@@ -88,6 +140,20 @@ _t.raise_union_unexpected_value = _raise_union
 
 
 def _should_check_val_fx(self: _TrainingEpochLoop, data_fetcher: _DataFetcher) -> bool:
+    """
+    Determina se eseguire la validazione durante il training.
+
+    Estende la logica standard di Lightning supportando controlli di
+    validazione basati sul global step quando vengono usati gradient
+    accumulation e validazione a intervalli di iterazioni.
+
+    Args:
+        self: Training epoch loop di Lightning.
+        data_fetcher: Data fetcher associato al loop.
+
+    Returns:
+        True se deve essere eseguita la validazione, False altrimenti.
+    """
     if not self._should_check_val_epoch():
         return False
 
@@ -121,7 +187,21 @@ def _should_check_val_fx(self: _TrainingEpochLoop, data_fetcher: _DataFetcher) -
 
 
 class LightningCLI(cli.LightningCLI):
+    """
+    Estensione personalizzata di LightningCLI per il training EoMT.
+
+    Configura warning, precisione numerica, collegamenti automatici tra
+    parametri del DataModule e del modello, gestione checkpoint e resume
+    automatico degli esperimenti.
+    """
     def __init__(self, *args, **kwargs):
+        """
+        Inizializza la CLI configurando ambiente, warning e opzioni Torch.
+
+        Args:
+            *args: Argomenti passati alla LightningCLI base.
+            **kwargs: Argomenti keyword passati alla LightningCLI base.
+        """
         logging.getLogger().setLevel(logging.INFO)
         torch.set_float32_matmul_precision("medium")
         torch._dynamo.config.capture_scalar_outputs = True
@@ -149,6 +229,19 @@ class LightningCLI(cli.LightningCLI):
         super().__init__(*args, **kwargs)
 
     def add_arguments_to_parser(self, parser):
+        """
+        Registra argomenti personalizzati e collega parametri condivisi.
+
+        I collegamenti mantengono coerenti numero di classi, dimensioni delle
+        immagini, classi stuff e checkpoint tra DataModule, modello, network ed
+        encoder.
+
+        Args:
+            parser: Parser utilizzato da LightningCLI.
+
+        Returns:
+            None.
+        """
         parser.add_argument("--compile_disabled", action="store_true")
         parser.add_argument(
             "--resume_disabled",
@@ -183,6 +276,21 @@ class LightningCLI(cli.LightningCLI):
         )
 
     def fit(self, model, **kwargs):
+        """
+        Avvia il training configurando logging, checkpoint e resume automatico.
+
+        Prima dell'addestramento registra il codice sorgente, aggiorna la
+        configurazione dei checkpoint, applica la logica personalizzata di
+        validazione e riprende automaticamente dall'ultimo checkpoint se
+        disponibile.
+
+        Args:
+            model: Modello Lightning da addestrare.
+            **kwargs: Argomenti inoltrati a trainer.fit.
+
+        Returns:
+            None.
+        """
         if hasattr(self.trainer.logger.experiment, "log_code"):
             is_gitignored = parse_gitignore(".gitignore")
             include_fn = lambda path: path.endswith(".py") or path.endswith(".yaml")
@@ -232,6 +340,16 @@ class LightningCLI(cli.LightningCLI):
 
 
 def cli_main():
+    """
+    Crea e avvia la LightningCLI del progetto.
+
+    Registra il LightningModule e il LightningDataModule, imposta i valori
+    predefiniti del trainer e configura callback, precisione e seed per gli
+    esperimenti.
+
+    Returns:
+        None.
+    """
     LightningCLI(
         LightningModule,
         LightningDataModule,

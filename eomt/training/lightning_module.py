@@ -41,6 +41,8 @@ reset = "\033[0m"
 
 
 class LightningModule(lightning.LightningModule):
+    """Classe base Lightning con training, metriche, preprocessing e checkpoint."""
+
     def __init__(
         self,
         network: nn.Module,
@@ -60,6 +62,8 @@ class LightningModule(lightning.LightningModule):
         delta_weights=False,
         load_ckpt_class_head=True,
     ):
+        """Inizializza modulo, iperparametri e carica eventuali checkpoint."""
+
         super().__init__()
 
         self.network = network
@@ -100,6 +104,8 @@ class LightningModule(lightning.LightningModule):
         self.log = torch.compiler.disable(self.log)  # type: ignore
 
     def configure_optimizers(self):
+        """Crea AdamW con layer-wise learning rate decay e scheduler warmup-polynomial."""
+
         encoder_param_names = {
             n for n, _ in self.network.encoder.backbone.named_parameters()
         }
@@ -169,11 +175,15 @@ class LightningModule(lightning.LightningModule):
         }
 
     def forward(self, imgs):
+        """Normalizza le immagini in [0, 1] e le passa alla rete."""
+
         x = imgs / 255.0
 
         return self.network(x)
 
     def training_step(self, batch, batch_idx):
+        """Calcola le loss per ogni blocco del modello e restituisce la loss totale."""
+
         imgs, targets = batch
 
         mask_logits_per_block, class_logits_per_block = self(imgs)
@@ -194,9 +204,13 @@ class LightningModule(lightning.LightningModule):
         return self.criterion.loss_total(losses_all_blocks, self.log)
 
     def validation_step(self, batch, batch_idx=0):
+        """Delega la validazione alla eval_step implementata dalle sottoclassi."""
+
         return self.eval_step(batch, batch_idx, "val")
 
     def mask_annealing(self, start_iter, current_iter, final_iter):
+        """Calcola la probabilita' residua della attention mask durante l'annealing."""
+
         device = self.device
         dtype = self.network.attn_mask_probs[0].dtype
         if current_iter < start_iter:
@@ -215,6 +229,8 @@ class LightningModule(lightning.LightningModule):
         batch_idx=None,
         dataloader_idx=None,
     ):
+        """Aggiorna e registra le probabilita' delle attention mask dopo ogni batch."""
+
         if self.attn_mask_annealing_enabled:
             for i in range(self.network.num_blocks):
                 self.network.attn_mask_probs[i] = self.mask_annealing(
@@ -231,6 +247,8 @@ class LightningModule(lightning.LightningModule):
                 )
 
     def init_metrics_semantic(self, ignore_idx, num_blocks):
+        """Inizializza una metrica IoU multiclass per ogni blocco valutato."""
+
         self.metrics = nn.ModuleList(
             [
                 MulticlassJaccardIndex(
@@ -244,11 +262,15 @@ class LightningModule(lightning.LightningModule):
         )
 
     def init_metrics_instance(self, num_blocks):
+        """Inizializza la mean Average Precision per instance segmentation."""
+
         self.metrics = nn.ModuleList(
             [MeanAveragePrecision(iou_type="segm") for _ in range(num_blocks)]
         )
 
     def init_metrics_panoptic(self, thing_classes, stuff_classes, num_blocks):
+        """Inizializza Panoptic Quality separando classi thing e stuff."""
+
         self.metrics = nn.ModuleList(
             [
                 PanopticQuality(
@@ -268,6 +290,8 @@ class LightningModule(lightning.LightningModule):
         targets: list[torch.Tensor],
         block_idx,
     ):
+        """Aggiorna la mIoU semantic per un blocco del modello."""
+
         for i in range(len(preds)):
             self.metrics[block_idx].update(preds[i][None, ...], targets[i][None, ...])
 
@@ -278,6 +302,8 @@ class LightningModule(lightning.LightningModule):
         targets: list[dict],
         block_idx,
     ):
+        """Aggiorna la mAP instance con predizioni e target del batch."""
+
         self.metrics[block_idx].update(preds, targets)
 
     @torch.compiler.disable
@@ -288,6 +314,8 @@ class LightningModule(lightning.LightningModule):
         is_crowds: list[torch.Tensor],
         block_idx,
     ):
+        """Aggiorna manualmente PQ gestendo segmenti crowd, void, TP, FP e FN."""
+
         for i in range(len(preds)):
             metric = self.metrics[block_idx]
             flatten_pred = _prepocess_inputs(
@@ -384,6 +412,8 @@ class LightningModule(lightning.LightningModule):
                 metric.false_positives[continuous_id] += 1
 
     def block_postfix(self, block_idx):
+        """Restituisce il suffisso di log associato al blocco valutato."""
+
         if not self.network.masked_attn_enabled:
             return ""
         return (
@@ -393,6 +423,8 @@ class LightningModule(lightning.LightningModule):
         )
 
     def _on_eval_epoch_end_semantic(self, log_prefix, log_per_class=False):
+        """Calcola, registra e resetta le metriche IoU semantic di fine epoca."""
+
         for i, metric in enumerate(self.metrics):  # type: ignore
             iou_per_class = metric.compute()
             metric.reset()
@@ -412,6 +444,8 @@ class LightningModule(lightning.LightningModule):
             )
 
     def _on_eval_epoch_end_instance(self, log_prefix):
+        """Calcola, registra e resetta le metriche mAP instance di fine epoca."""
+
         for i, metric in enumerate(self.metrics):  # type: ignore
             results = metric.compute()
             metric.reset()
@@ -443,6 +477,8 @@ class LightningModule(lightning.LightningModule):
             )
 
     def _on_eval_epoch_end_panoptic(self, log_prefix, log_per_class=False):
+        """Calcola, registra e resetta PQ, SQ e RQ per la validazione panoptic."""
+
         for i, metric in enumerate(self.metrics):  # type: ignore
             result = metric.compute()[:-1]
             metric.reset()
@@ -510,12 +546,16 @@ class LightningModule(lightning.LightningModule):
             )
 
     def _on_eval_end_semantic(self, log_prefix):
+        """Stampa a terminale il riepilogo mIoU quando la validazione e' conclusa."""
+
         if not self.trainer.sanity_checking:
             rank_zero_info(
                 f"{bold_green}mIoU: {self.trainer.callback_metrics[f'metrics/{log_prefix}_iou_all'] * 100:.1f}{reset}"
             )
 
     def _on_eval_end_instance(self, log_prefix):
+        """Stampa a terminale il riepilogo mAP quando la validazione e' conclusa."""
+
         if not self.trainer.sanity_checking:
             rank_zero_info(
                 f"{bold_green}mAP All: {self.trainer.callback_metrics[f'metrics/{log_prefix}_ap_all'] * 100:.1f} | "
@@ -525,6 +565,8 @@ class LightningModule(lightning.LightningModule):
             )
 
     def _on_eval_end_panoptic(self, log_prefix):
+        """Stampa a terminale il riepilogo PQ quando la validazione e' conclusa."""
+
         if not self.trainer.sanity_checking:
             rank_zero_info(
                 f"{bold_green}PQ All: {self.trainer.callback_metrics[f'metrics/{log_prefix}_pq_all'] * 100:.1f} | "
@@ -543,6 +585,8 @@ class LightningModule(lightning.LightningModule):
         batch_idx,
         cmap="tab20",
     ):
+        """Crea e invia a WandB un confronto immagine-target-predizione semantic."""
+
         fig, axes = plt.subplots(1, 3, figsize=[15, 5], sharex=True, sharey=True)
 
         axes[0].imshow(img.cpu().numpy().transpose(1, 2, 0))
@@ -599,6 +643,8 @@ class LightningModule(lightning.LightningModule):
 
     @torch.compiler.disable
     def scale_img_size_semantic(self, size: tuple[int, int]):
+        """Scala una dimensione immagine per coprire la finestra semantic richiesta."""
+
         factor = max(
             self.img_size[0] / size[0],
             self.img_size[1] / size[1],
@@ -608,6 +654,8 @@ class LightningModule(lightning.LightningModule):
 
     @torch.compiler.disable
     def window_imgs_semantic(self, imgs):
+        """Ridimensiona le immagini semantic e le divide in crop sovrapposti."""
+
         crops, origins = [], []
 
         for i in range(len(imgs)):
@@ -637,6 +685,8 @@ class LightningModule(lightning.LightningModule):
         return torch.stack(crops), origins
 
     def revert_window_logits_semantic(self, crop_logits, origins, img_sizes):
+        """Ricompone i logits dei crop semantic e li riporta alla dimensione originale."""
+
         logit_sums, logit_counts = [], []
         for size in img_sizes:
             h, w = self.scale_img_size_semantic(size)
@@ -668,6 +718,8 @@ class LightningModule(lightning.LightningModule):
     def to_per_pixel_logits_semantic(
         mask_logits: torch.Tensor, class_logits: torch.Tensor
     ):
+        """Combina logits di maschera e classe in score semantic per pixel."""
+
         return torch.einsum(
             "bqhw, bqc -> bchw",
             mask_logits.sigmoid(),
@@ -680,6 +732,8 @@ class LightningModule(lightning.LightningModule):
         targets: list[dict],
         ignore_idx,
     ):
+        """Converte target a maschere di istanza in una mappa semantic per pixel."""
+
         per_pixel_targets = []
         for target in targets:
             per_pixel_target = torch.full(
@@ -697,6 +751,8 @@ class LightningModule(lightning.LightningModule):
         return per_pixel_targets
 
     def scale_img_size_instance_panoptic(self, size: tuple[int, int]):
+        """Scala una dimensione immagine per stare dentro la finestra instance/panoptic."""
+
         factor = min(
             self.img_size[0] / size[0],
             self.img_size[1] / size[1],
@@ -706,6 +762,8 @@ class LightningModule(lightning.LightningModule):
 
     @torch.compiler.disable
     def resize_and_pad_imgs_instance_panoptic(self, imgs):
+        """Ridimensiona e applica padding alle immagini per inferenza instance/panoptic."""
+
         transformed_imgs = []
 
         for img in imgs:
@@ -731,6 +789,8 @@ class LightningModule(lightning.LightningModule):
     def revert_resize_and_pad_logits_instance_panoptic(
         self, transformed_logits, img_sizes
     ):
+        """Rimuove il padding dai logits e li riporta alle dimensioni originali."""
+
         logits = []
         for i in range(len(transformed_logits)):
             scaled_size = self.scale_img_size_instance_panoptic(img_sizes[i])
@@ -747,6 +807,8 @@ class LightningModule(lightning.LightningModule):
     def to_per_pixel_preds_panoptic(
         self, mask_logits_list, class_logits, stuff_classes, mask_thresh, overlap_thresh
     ):
+        """Converte query mask/class in predizioni panoptic per pixel."""
+
         scores, classes = class_logits.softmax(dim=-1).max(-1)
         preds_list = []
 
@@ -814,6 +876,8 @@ class LightningModule(lightning.LightningModule):
     @staticmethod
     @torch.compiler.disable
     def to_per_pixel_targets_panoptic(targets: list[dict]):
+        """Converte i target panoptic in mappe per pixel con id classe e id segmento."""
+
         per_pixel_targets = []
         for target in targets:
             per_pixel_target = -torch.ones(
@@ -838,6 +902,8 @@ class LightningModule(lightning.LightningModule):
         return per_pixel_targets
 
     def on_save_checkpoint(self, checkpoint):
+        """Ripulisce le chiavi del checkpoint dai prefissi aggiunti da torch.compile."""
+
         checkpoint["state_dict"] = {
             k.replace("._orig_mod", ""): v for k, v in checkpoint["state_dict"].items()
         }
@@ -845,6 +911,8 @@ class LightningModule(lightning.LightningModule):
     def _zero_init_outside_encoder(
         self, encoder_prefix="network.encoder.", skip_class_head=False
     ):
+        """Azzera i pesi fuori dall'encoder, utile per sommare delta weights."""
+
         with torch.no_grad():
             total, zeroed = 0, 0
             for name, p in self.named_parameters():
@@ -863,6 +931,8 @@ class LightningModule(lightning.LightningModule):
             logging.info(msg)
 
     def _add_state_dicts(self, state_dict1, state_dict2):
+        """Somma due state_dict verificando che chiavi e forme coincidano."""
+
         summed = {}
         for k in state_dict1.keys():
             if k not in state_dict2:
@@ -879,6 +949,8 @@ class LightningModule(lightning.LightningModule):
         return summed
 
     def _load_ckpt(self, ckpt_path, load_ckpt_class_head):
+        """Carica un checkpoint e filtra eventuali chiavi non desiderate."""
+
         ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=True)
         if "state_dict" in ckpt:
             ckpt = ckpt["state_dict"]
@@ -893,6 +965,8 @@ class LightningModule(lightning.LightningModule):
         return ckpt
 
     def _raise_on_incompatible(self, incompatible_keys, load_ckpt_class_head):
+        """Solleva errori se il caricamento checkpoint lascia chiavi incompatibili."""
+
         if incompatible_keys.missing_keys:
             if not load_ckpt_class_head:
                 missing_keys = [

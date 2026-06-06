@@ -13,6 +13,8 @@ from training.lightning_module import LightningModule
 
 
 class MaskClassificationPanoptic(LightningModule):
+    """Modulo Lightning per addestramento e validazione di panoptic segmentation."""
+
     def __init__(
         self,
         network: nn.Module,
@@ -42,6 +44,8 @@ class MaskClassificationPanoptic(LightningModule):
         delta_weights: bool = False,
         load_ckpt_class_head: bool = True,
     ):
+        """Inizializza modello, loss, classi thing/stuff e metrica Panoptic Quality."""
+
         super().__init__(
             network=network,
             img_size=img_size,
@@ -91,6 +95,8 @@ class MaskClassificationPanoptic(LightningModule):
         batch_idx=None,
         log_prefix=None,
     ):
+        """Produce mappe panoptic per pixel e aggiorna PQ, SQ e RQ."""
+
         imgs, targets = batch
 
         img_sizes = [img.shape[-2:] for img in imgs]
@@ -117,7 +123,11 @@ class MaskClassificationPanoptic(LightningModule):
             self.update_metrics_panoptic(preds, targets, is_crowds, i)
 
     def on_validation_epoch_end(self):
+        """Calcola e registra le metriche panoptic alla fine dell'epoca di validazione."""
+
         self._on_eval_epoch_end_panoptic("val")
 
     def on_validation_end(self):
+        """Stampa il riepilogo finale della Panoptic Quality di validazione."""
+
         self._on_eval_end_panoptic("val")

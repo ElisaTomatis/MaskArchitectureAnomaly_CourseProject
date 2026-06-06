@@ -11,6 +11,23 @@ import matplotlib.pyplot as plt
 
 
 def load_model(device, config, state_dict_path):
+    """
+    Costruisce e carica un modello EoMT a partire dalla configurazione e dai
+    pesi salvati.
+
+    Ricrea dinamicamente encoder, network e Lightning module usando i percorsi
+    delle classi presenti in `config`, imposta il modello in modalita di
+    valutazione e carica lo state dict sul dispositivo scelto.
+
+    Args:
+        device: Dispositivo su cui caricare il modello, ad esempio "cpu" o
+            "cuda".
+        config: Configurazione del modello in formato dizionario.
+        state_dict_path: Percorso del file contenente i pesi del modello.
+
+    Returns:
+        Modello EoMT inizializzato, con pesi caricati e spostato su `device`.
+    """
     # Load encoder
     encoder_cfg = config["model"]["init_args"]["network"]["init_args"]["encoder"]
     encoder_module_name, encoder_class_name = encoder_cfg["class_path"].rsplit(".", 1)
@@ -61,6 +78,30 @@ def load_model(device, config, state_dict_path):
     return model
 
 def compute_logits(imgs, device, model, train = False):
+    """
+    Calcola le logits semantiche per una o più immagini.
+
+    Le immagini vengono spostate sul dispositivo indicato, suddivise nelle
+    finestre usate da EoMT, processate dal modello e successivamente
+    ricomposte nella risoluzione originale. Le logits finali rappresentano il
+    punteggio di ogni classe nota per ciascun pixel.
+
+    Se `train=True`, il forward viene eseguito all'interno di `torch.no_grad()`
+    e con mixed precision (`autocast`). Se `train=False`, il forward viene
+    eseguito senza questi contesti, permettendo la costruzione del grafo dei
+    gradienti.
+
+    Args:
+        imgs: Lista di tensori immagine in formato compatibile con il modello.
+        device: Dispositivo su cui eseguire l'inferenza o il forward.
+        model: Modello EoMT già caricato.
+        train: Flag che controlla l'utilizzo di `torch.no_grad()` e
+            `autocast`. Default: False.
+
+    Returns:
+        Tensore delle logits per-pixel della prima immagine elaborata, con
+        shape `[num_classes, H, W]`.
+    """
     if train:
         with torch.no_grad(), autocast(dtype=torch.float16, device_type="cuda"):
             imgs = [img.to(device) for img in imgs]
@@ -95,6 +136,19 @@ def compute_logits(imgs, device, model, train = False):
     return logits[0]
 
 def create_pathGT(path):
+    """
+    Ricava il percorso della maschera ground truth associata a un'immagine.
+
+    Sostituisce la cartella delle immagini con quella delle label e adatta
+    l'estensione del file nei dataset che usano formati diversi per input e
+    maschere.
+
+    Args:
+        path: Percorso dell'immagine di input.
+
+    Returns:
+        Percorso atteso della rispettiva maschera ground truth.
+    """
     pathGT = path.replace("images", "labels_masks")                
     if "RoadObsticle21" in pathGT:
         pathGT = pathGT.replace("webp", "png")
@@ -105,6 +159,20 @@ def create_pathGT(path):
     return pathGT 
 
 def create_oodgts(mask, pathGT):
+    """
+    Converte una maschera ground truth nel formato binario ID/OoD.
+
+    In base al dataset, i valori originali della maschera vengono rimappati in
+    0 per pixel in-distribution, 1 per pixel out-of-distribution e 255 per pixel
+    da ignorare nella valutazione.
+
+    Args:
+        mask: Maschera ground truth letta da file.
+        pathGT: Percorso della maschera, usato per riconoscere il dataset.
+
+    Returns:
+        Array NumPy con la maschera rimappata in formato ID/OoD.
+    """
     ood_gts = np.array(mask)
     if "RoadAnomaly" in pathGT:
         ood_gts = np.where((ood_gts==2), 1, ood_gts)
@@ -120,6 +188,22 @@ def create_oodgts(mask, pathGT):
     return ood_gts
 
 def eval_score(ood_gts_list, anomaly_score_list):
+    """
+    Calcola le metriche principali per la valutazione dell'anomaly detection.
+
+    Le maschere ground truth e le mappe di anomaly score vengono convertite in
+    vettori di pixel ID e OoD. Su questi vettori vengono poi calcolati Average
+    Precision e FPR al 95% di TPR.
+
+    Args:
+        ood_gts_list: Lista o array di maschere ground truth binarie, dove 1
+            indica pixel OoD e 0 indica pixel ID.
+        anomaly_score_list: Lista o array di mappe di punteggio anomalia
+            associate alle immagini valutate.
+
+    Returns:
+        Lista `[prc_auc, fpr]` con Average Precision e FPR@95TPR.
+    """
     
     ood_gts = np.array(ood_gts_list)
     anomaly_scores = np.array(anomaly_score_list)

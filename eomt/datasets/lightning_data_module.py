@@ -10,6 +10,13 @@ import lightning
 
 
 class LightningDataModule(lightning.LightningDataModule):
+    """
+    Classe base per i DataModule Lightning del progetto.
+
+    Salva parametri comuni come path, dimensione immagine, numero classi e
+    opzioni del DataLoader, e fornisce funzioni di collate condivise da dataset
+    semantic, instance e panoptic.
+    """
     def __init__(
         self,
         path,
@@ -22,6 +29,21 @@ class LightningDataModule(lightning.LightningDataModule):
         pin_memory: bool = True,
         persistent_workers: bool = True,
     ) -> None:
+        """
+        Inizializza i parametri comuni dei DataModule.
+
+        Args:
+            path: Percorso principale del dataset.
+            batch_size: Numero di campioni per batch.
+            num_workers: Numero di worker del DataLoader.
+            img_size: Dimensione delle immagini usata dalle trasformazioni.
+            num_classes: Numero di classi del task.
+            check_empty_targets: Se `True`, scarta target senza annotazioni.
+            ignore_idx: Indice opzionale da ignorare nelle label.
+            pin_memory: Abilita `pin_memory` nel DataLoader.
+            persistent_workers: Mantiene i worker attivi tra epoche quando
+                `num_workers > 0`.
+        """
         super().__init__()
 
         self.path = path
@@ -39,6 +61,15 @@ class LightningDataModule(lightning.LightningDataModule):
 
     @staticmethod
     def train_collate(batch):
+        """
+        Collate function per il training.
+
+        Args:
+            batch: Lista di tuple `(img, target)`.
+
+        Returns:
+            Tupla con immagini impilate in un tensore e lista dei target.
+        """
         imgs, targets = [], []
 
         for img, target in batch:
@@ -49,4 +80,13 @@ class LightningDataModule(lightning.LightningDataModule):
 
     @staticmethod
     def eval_collate(batch):
+        """
+        Collate function per validazione e test.
+
+        Args:
+            batch: Lista di campioni del dataset.
+
+        Returns:
+            Tuple ottenute con `zip`, mantenendo separati i campi originali.
+        """
         return tuple(zip(*batch))

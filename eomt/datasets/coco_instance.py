@@ -100,6 +100,13 @@ CLASS_MAPPING = {
 
 
 class COCOInstance(LightningDataModule):
+    """
+    DataModule Lightning per COCO instance segmentation.
+
+    Usa le annotazioni JSON COCO, converte i poligoni in maschere binarie con
+    `pycocotools` e rimappa gli id categoria COCO negli indici contigui usati
+    dal modello.
+    """
     def __init__(
         self,
         path,
@@ -111,6 +118,19 @@ class COCOInstance(LightningDataModule):
         scale_range=(0.1, 2.0),
         check_empty_targets=True,
     ) -> None:
+        """
+        Inizializza il DataModule COCO instance.
+
+        Args:
+            path: Cartella contenente zip immagini e annotazioni COCO.
+            num_workers: Numero di worker del DataLoader.
+            batch_size: Dimensione del batch.
+            img_size: Dimensione finale delle immagini.
+            num_classes: Numero di classi COCO thing.
+            color_jitter_enabled: Abilita il jitter cromatico in training.
+            scale_range: Intervallo di scala per lo scale jitter.
+            check_empty_targets: Scarta immagini senza istanze valide.
+        """
         super().__init__(
             path=path,
             batch_size=batch_size,
@@ -136,6 +156,21 @@ class COCOInstance(LightningDataModule):
         height: int,
         **kwargs
     ):
+        """
+        Converte annotazioni COCO polygon/RLE in maschere instance.
+
+        Args:
+            polygons_by_id: Segmentazioni COCO indicizzate per annotazione.
+            labels_by_id: Categoria COCO di ogni annotazione.
+            is_crowd_by_id: Flag crowd di ogni annotazione.
+            width: Larghezza dell'immagine.
+            height: Altezza dell'immagine.
+            **kwargs: Parametri aggiuntivi non usati.
+
+        Returns:
+            Tupla `(masks, labels, is_crowd)` con maschere booleane, classi
+            rimappate e flag crowd.
+        """
         masks, labels, is_crowd = [], [], []
 
         for label_id, cls_id in labels_by_id.items():
@@ -153,6 +188,15 @@ class COCOInstance(LightningDataModule):
         return masks, labels, is_crowd
 
     def setup(self, stage: Union[str, None] = None) -> LightningDataModule:
+        """
+        Crea dataset COCO instance di training e validazione.
+
+        Args:
+            stage: Stage Lightning opzionale.
+
+        Returns:
+            L'istanza corrente del DataModule.
+        """
         dataset_kwargs = {
             "img_suffix": ".jpg",
             "target_parser": self.target_parser,
@@ -178,6 +222,9 @@ class COCOInstance(LightningDataModule):
         return self
 
     def train_dataloader(self):
+        """
+        Restituisce il DataLoader di training COCO instance.
+        """
         return DataLoader(
             self.train_dataset,
             shuffle=True,
@@ -187,6 +234,9 @@ class COCOInstance(LightningDataModule):
         )
 
     def val_dataloader(self):
+        """
+        Restituisce il DataLoader di validazione COCO instance.
+        """
         return DataLoader(
             self.val_dataset,
             collate_fn=self.eval_collate,

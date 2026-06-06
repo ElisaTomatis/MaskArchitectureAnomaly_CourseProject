@@ -20,6 +20,8 @@ from transformers.models.mask2former.modeling_mask2former import (
 
 
 class MaskClassificationLoss(Mask2FormerLoss):
+    """Loss per mask classification basata su Hungarian matching in stile Mask2Former."""
+
     def __init__(
         self,
         num_points: int,
@@ -31,6 +33,8 @@ class MaskClassificationLoss(Mask2FormerLoss):
         num_labels: int,
         no_object_coefficient: float,
     ):
+        """Configura pesi delle loss, classe no-object e matcher Hungarian."""
+
         nn.Module.__init__(self)
         self.num_points = num_points
         self.oversample_ratio = oversample_ratio
@@ -58,6 +62,8 @@ class MaskClassificationLoss(Mask2FormerLoss):
         targets: List[dict],
         class_queries_logits: Optional[torch.Tensor] = None,
     ):
+        """Associa predizioni e target, poi calcola loss di maschera e classificazione."""
+
         mask_labels = [
             target["masks"].to(masks_queries_logits.dtype) for target in targets
         ]
@@ -76,6 +82,8 @@ class MaskClassificationLoss(Mask2FormerLoss):
         return {**loss_masks, **loss_classes}
 
     def loss_masks(self, masks_queries_logits, mask_labels, indices):
+        """Calcola le loss sulle maschere e le normalizza sul numero medio di maschere."""
+
         loss_masks = super().loss_masks(masks_queries_logits, mask_labels, indices, 1)
 
         num_masks = sum(len(tgt) for (_, tgt) in indices)
@@ -97,6 +105,8 @@ class MaskClassificationLoss(Mask2FormerLoss):
         return loss_masks
 
     def loss_total(self, losses_all_layers, log_fn) -> torch.Tensor:
+        """Pesa e somma tutte le componenti di loss, registrandole nei log di training."""
+
         loss_total = None
         for loss_key, loss in losses_all_layers.items():
             log_fn(f"losses/train_{loss_key}", loss, sync_dist=True)

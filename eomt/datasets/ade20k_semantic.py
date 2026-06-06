@@ -16,6 +16,13 @@ CLASS_MAPPING = {i: i - 1 for i in range(1, 151)}
 
 
 class ADE20KSemantic(LightningDataModule):
+    """
+    DataModule Lightning per ADE20K in segmentazione semantica.
+
+    Legge immagini e annotazioni dall'archivio ADEChallengeData2016, rimappa le
+    classi ADE20K da indice 1-150 a indice 0-149 e costruisce DataLoader per
+    training e validazione.
+    """
     def __init__(
         self,
         path,
@@ -27,6 +34,19 @@ class ADE20KSemantic(LightningDataModule):
         scale_range=(0.5, 2.0),
         check_empty_targets=True,
     ) -> None:
+        """
+        Inizializza il DataModule semantico ADE20K.
+
+        Args:
+            path: Cartella contenente `ADEChallengeData2016.zip`.
+            num_workers: Numero di worker del DataLoader.
+            batch_size: Dimensione del batch.
+            img_size: Dimensione finale delle immagini.
+            num_classes: Numero di classi ADE20K.
+            color_jitter_enabled: Abilita il jitter cromatico in training.
+            scale_range: Intervallo di scala per lo scale jitter.
+            check_empty_targets: Scarta immagini con target vuoti.
+        """
         super().__init__(
             path=path,
             batch_size=batch_size,
@@ -45,6 +65,17 @@ class ADE20KSemantic(LightningDataModule):
 
     @staticmethod
     def target_parser(target, **kwargs):
+        """
+        Converte una maschera ADE20K in maschere binarie per classe.
+
+        Args:
+            target: Maschera label ADE20K.
+            **kwargs: Parametri aggiuntivi non usati.
+
+        Returns:
+            Tupla `(masks, labels, is_crowd)` con maschere per classe valida,
+            label rimappate e flag crowd sempre falsi.
+        """
         masks, labels = [], []
 
         for label_id in target[0].unique():
@@ -59,6 +90,15 @@ class ADE20KSemantic(LightningDataModule):
         return masks, labels, [False for _ in range(len(masks))]
 
     def setup(self, stage: Union[str, None] = None) -> LightningDataModule:
+        """
+        Crea dataset ADE20K di training e validazione.
+
+        Args:
+            stage: Stage Lightning opzionale.
+
+        Returns:
+            L'istanza corrente del DataModule.
+        """
         dataset_kwargs = {
             "img_suffix": ".jpg",
             "target_suffix": ".png",
@@ -86,6 +126,9 @@ class ADE20KSemantic(LightningDataModule):
         return self
 
     def train_dataloader(self):
+        """
+        Restituisce il DataLoader di training ADE20K.
+        """
         dataset = self.train_dataset
 
         return DataLoader(
@@ -97,6 +140,9 @@ class ADE20KSemantic(LightningDataModule):
         )
 
     def val_dataloader(self):
+        """
+        Restituisce il DataLoader di validazione ADE20K.
+        """
         return DataLoader(
             self.val_dataset,
             collate_fn=self.eval_collate,

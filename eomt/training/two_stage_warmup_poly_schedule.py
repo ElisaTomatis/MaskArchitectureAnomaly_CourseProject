@@ -8,6 +8,8 @@ from torch.optim.lr_scheduler import LRScheduler
 
 
 class TwoStageWarmupPolySchedule(LRScheduler):
+    """Scheduler con warmup separato per backbone ViT e resto del modello."""
+
     def __init__(
         self,
         optimizer,
@@ -17,6 +19,8 @@ class TwoStageWarmupPolySchedule(LRScheduler):
         poly_power: float,
         last_epoch=-1,
     ):
+        """Salva la configurazione dello scheduler e inizializza LRScheduler."""
+
         self.num_backbone_params = num_backbone_params
         self.warmup_steps = warmup_steps
         self.total_steps = total_steps
@@ -24,6 +28,8 @@ class TwoStageWarmupPolySchedule(LRScheduler):
         super().__init__(optimizer, last_epoch)
 
     def get_lr(self):
+        """Calcola il learning rate corrente con warmup a due stadi e decadimento polinomiale."""
+
         step = self.last_epoch
         lrs = []
         non_vit_warmup, vit_warmup = self.warmup_steps

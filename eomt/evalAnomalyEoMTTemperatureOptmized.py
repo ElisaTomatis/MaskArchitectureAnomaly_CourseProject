@@ -14,6 +14,14 @@ from PIL import Image
 from torchvision.transforms import Compose, Resize, ToTensor
 from functions import *
 
+"""
+Valutazione anomaly detection con temperature scaling ottimizzata in memoria.
+
+Rispetto alla versione standard, questo script salva temporaneamente su disco
+le logits delle sole immagini che contengono anomalie. In questo modo valuta
+una temperatura alla volta senza mantenere in RAM tutte le mappe di score per
+tutte le temperature.
+"""
 
 IGNORE_INDEX = 255
 
@@ -28,6 +36,22 @@ target_transform = Compose([
 
 
 def main():
+    """
+    Valuta diverse temperature softmax riducendo l'uso di memoria.
+
+    La funzione carica il modello, seleziona solo le immagini con ground truth
+    OoD, salva le logits in file `.npy` temporanei e poi rilegge una immagine
+    alla volta per calcolare gli score con ciascuna temperatura. Alla fine
+    misura AUPRC e FPR@TPR95 per ogni temperatura, salva la migliore in
+    `results.txt` e rimuove la cartella temporanea.
+
+    Args:
+        None. Gli argomenti vengono letti da `ArgumentParser`.
+
+    Returns:
+        None. I risultati vengono stampati a schermo e scritti in
+        `results.txt`.
+    """
     parser = ArgumentParser()
     parser.add_argument("--input")  
     args = parser.parse_args()
