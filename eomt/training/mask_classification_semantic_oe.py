@@ -76,7 +76,7 @@ class MaskClassificationSemanticOE(MaskClassificationSemantic):
         **kwargs,
     ) -> None:
         """Inizializza la variante OE e, se richiesto, congela tutto tranne gli head."""
-
+        kwargs.setdefault("lr_scheduler", "none")
         # Costruiamo la classe base che contiene modello, loss e metriche.
         super().__init__(*args, **kwargs)
         self.lambda_rba = lambda_rba
@@ -133,11 +133,23 @@ class MaskClassificationSemanticOE(MaskClassificationSemantic):
         """
 
         trainable_params = [p for p in self.parameters() if p.requires_grad]
-        return AdamW(
+        optimizer = AdamW(
             trainable_params,
             lr=self.lr,
             weight_decay=self.weight_decay,
         )
+        scheduler_config = self._build_lr_scheduler_config(
+            optimizer=optimizer,
+            num_backbone_params=0,
+        )
+        if scheduler_config is None:
+            return optimizer
+
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": scheduler_config,
+        }
+
 
     def _extract_ood_masks(
         self,

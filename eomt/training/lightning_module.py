@@ -34,6 +34,7 @@ from torch.nn.functional import interpolate
 from torchvision.transforms.v2.functional import pad
 import logging
 
+from training.cosine_warmup_schedule import CosineWarmupSchedule
 from training.two_stage_warmup_poly_schedule import TwoStageWarmupPolySchedule
 
 bold_green = "\033[1;32m"
@@ -58,6 +59,9 @@ class LightningModule(lightning.LightningModule):
         weight_decay: float,
         poly_power: float,
         warmup_steps: tuple[int, int],
+        lr_scheduler: str = "two_stage_warmup_poly",
+        cosine_warmup_ratio: float = 0.1,
+        cosine_min_lr_ratio: float = 0.0,
         ckpt_path=None,
         delta_weights=False,
         load_ckpt_class_head=True,
@@ -78,6 +82,17 @@ class LightningModule(lightning.LightningModule):
         self.weight_decay = weight_decay
         self.poly_power = poly_power
         self.warmup_steps = warmup_steps
+         # Seleziona lo scheduler da usare in configure_optimizers().
+        # Valori supportati:
+        # - "two_stage_warmup_poly": comportamento originale
+        # - "cosine_warmup": warmup lineare + cosine decay 
+        self.lr_scheduler = lr_scheduler
+        # Percentuale degli step totali dedicata al warmup nel nuovo scheduler
+        # coseno. Il default 0.1 corrisponde al 10% richiesto.
+        self.cosine_warmup_ratio = cosine_warmup_ratio
+        # Learning rate finale come frazione del learning rate iniziale nel
+        # cosine decay. 0.0 significa decadimento fino a zero.
+        self.cosine_min_lr_ratio = cosine_min_lr_ratio
         self.llrd_l2_enabled = llrd_l2_enabled
 
         self.strict_loading = False
@@ -104,7 +119,7 @@ class LightningModule(lightning.LightningModule):
         self.log = torch.compiler.disable(self.log)  # type: ignore
 
     def configure_optimizers(self):
-        """Crea AdamW con layer-wise learning rate decay e scheduler warmup-polynomial."""
+        """Crea AdamW con layer-wise LR decay e scheduler selezionabile."""
 
         encoder_param_names = {
             n for n, _ in self.network.encoder.backbone.named_parameters()
@@ -157,22 +172,68 @@ class LightningModule(lightning.LightningModule):
         param_groups = backbone_param_groups + other_param_groups
         optimizer = AdamW(param_groups, weight_decay=self.weight_decay)
 
-        scheduler = TwoStageWarmupPolySchedule(
-            optimizer,
+        scheduler_config = self._build_lr_scheduler_config(
+            optimizer=optimizer,
             num_backbone_params=len(backbone_param_groups),
-            warmup_steps=self.warmup_steps,
-            total_steps=self.trainer.estimated_stepping_batches,
-            poly_power=self.poly_power,
         )
+
+        if scheduler_config is None:
+            return optimizer
 
         return {
             "optimizer": optimizer,
-            "lr_scheduler": {
-                "scheduler": scheduler,
-                "interval": "step",
-                "frequency": 1,
-            },
+             "lr_scheduler": scheduler_config,
         }
+
+    def _build_lr_scheduler_config(self, optimizer, num_backbone_params: int = 0):
+        """Costruisce la configurazione Lightning dello scheduler.
+
+        La logica e' isolata in un helper per poterla riusare anche nelle
+        sottoclassi di fine tuning che ridefiniscono `configure_optimizers()`
+        (ad esempio la variante OE, che ottimizza solo i parametri non
+        congelati). Lo scheduler viene eseguito a ogni step dell'optimizer, non
+        a ogni epoca, cosi' il warmup del 10% e il cosine decay sono calcolati
+        sul numero reale di update stimato da Lightning.
+        """
+
+        if self.lr_scheduler in (None, "none", "disabled", "off"):
+            # Nessuno scheduler: Lightning riceverà solo l'optimizer.
+            return None
+
+        if self.lr_scheduler == "two_stage_warmup_poly":
+            # Scheduler originale del progetto EoMT: warmup diverso per backbone
+            # ViT e resto del modello, seguito da decadimento polinomiale.
+            scheduler = TwoStageWarmupPolySchedule(
+                optimizer,
+                num_backbone_params=num_backbone_params,
+                warmup_steps=self.warmup_steps,
+                total_steps=self.trainer.estimated_stepping_batches,
+                poly_power=self.poly_power,
+            )
+        elif self.lr_scheduler == "cosine_warmup":
+            # Nuovo scheduler per fine tuning breve: 10% degli step in warmup
+            # lineare (configurabile con cosine_warmup_ratio) e resto in cosine
+            # decay. Usa gli stessi base_lr gia' presenti nei param group, quindi
+            # rispetta eventuali LR diversi o layer-wise decay.
+            scheduler = CosineWarmupSchedule(
+                optimizer,
+                total_steps=self.trainer.estimated_stepping_batches,
+                warmup_ratio=self.cosine_warmup_ratio,
+                min_lr_ratio=self.cosine_min_lr_ratio,
+            )
+        else:
+            supported = "two_stage_warmup_poly, cosine_warmup, none"
+            raise ValueError(
+                f"Scheduler LR non supportato: {self.lr_scheduler!r}. "
+                f"Valori supportati: {supported}."
+            )
+
+        return {
+            "scheduler": scheduler,
+            "interval": "step",
+            "frequency": 1,
+        }
+
 
     def forward(self, imgs):
         """Normalizza le immagini in [0, 1] e le passa alla rete."""

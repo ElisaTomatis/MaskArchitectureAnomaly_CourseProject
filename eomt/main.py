@@ -243,6 +243,16 @@ class LightningCLI(cli.LightningCLI):
             None.
         """
         parser.add_argument("--compile_disabled", action="store_true")
+
+        parser.add_argument(
+            "--scheduler",
+            default=None,
+            help=(
+                "Scheduler LR opzionale da inoltrare al modello. "
+                "Esempi: cosine_warmup, two_stage_warmup_poly, none."
+            ),
+        )
+
         parser.add_argument(
             "--resume_disabled",
             action="store_true",
