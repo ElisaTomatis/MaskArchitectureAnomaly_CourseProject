@@ -434,9 +434,8 @@ def create_empty_metric_storage(score_keys):
     """
     return {
         "ood_gts": [],
-        "anomaly_scores": {{k: [] for k in score_keys},
-        },
-    }
+        "anomaly_scores": {k: [] for k in score_keys},
+        }
 
 
 def add_image_to_metric_storage(image_path, anomaly_score_maps, metric_storage):
@@ -484,7 +483,7 @@ def print_anomaly_metric_results(metric_storage):
         print(f"FPR@TPR95 {score_name}: {fpr * 100.0:.2f}")
 
 
-def build_output_paths(image_path, output_dir):
+def build_output_paths(image_path, output_dir, score_keys):
     """
     Costruisce i nomi dei file di output per una immagine.
 
