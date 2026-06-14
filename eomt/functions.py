@@ -64,7 +64,7 @@ def load_model(device, config, state_dict_path):
         .to(device)
     )
 
-    if device == 'cpu':
+    if device == torch.device('cpu'):
         state_dict = torch.load(
                     state_dict_path, map_location="cpu", weights_only=True
                 )
