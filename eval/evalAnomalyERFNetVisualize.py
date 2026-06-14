@@ -149,13 +149,15 @@ def compute_logits_for_image(image_path, model, device):
     return original_image, logits
 
 
-def compute_anomaly_score_maps(logits):
+def compute_anomaly_score_maps(logits, temperatures=None):
     """
     Calcola le mappe di anomalia usate dagli script di valutazione ERFNet.
 
     Produce tre score post-hoc: max-logit (`1 - max(logit)`), MSP
     (`1 - max(softmax)`) ed entropia della softmax. Valori piu' alti indicano
     pixel che il modello considera piu' incerti o sospetti.
+    
+    Se passato in input il vettore delle temperature calcola MSP t
     """
     logits_cpu = logits.detach().cpu()
 
@@ -164,11 +166,20 @@ def compute_anomaly_score_maps(logits):
     anomaly_result_softmax = 1.0 - np.max(probs_tensor.numpy(), axis=0)
     anomaly_result_entropy = -torch.sum(probs_tensor * torch.log(probs_tensor.clamp_min(1e-12)), dim=0).numpy()
 
-    return {
+    maps = {
         "logit": anomaly_result_logit,
         "softmax": anomaly_result_softmax,
         "entropy": anomaly_result_entropy,
     }
+
+    if temperatures:
+        for t in temperatures:
+            logits_t = logits_cpu / t
+            probs_t = F.softmax(logits_t, dim=0)
+            anomaly_t = 1.0 - np.max(probs_t.numpy(), axis=0)
+            maps[f"msp_T_{t}"] = anomaly_t
+
+    return maps
 
 
 def normalize_map(score_map):
@@ -313,10 +324,10 @@ def save_anomaly_visualization(image_path, output_path, score_name, score_map, o
     fig, axes = plt.subplots(1, 3, figsize=(18, 6))
 
     axes[0].imshow(original_np)
-    axes[0].set_title("Immagine originale")
+    axes[0].set_title("Original Image")
 
     heatmap = axes[1].imshow(score_map, cmap="hot")
-    axes[1].set_title(f"Score anomalia {score_name}")
+    axes[1].set_title(f"Anomaly Score {score_name}")
     fig.colorbar(heatmap, ax=axes[1], fraction=0.046, pad=0.04)
 
     axes[2].imshow(original_np)
@@ -367,10 +378,10 @@ def save_semantic_prediction_visualization(
     fig, axes = plt.subplots(1, 3, figsize=(18, 6))
 
     axes[0].imshow(original_np)
-    axes[0].set_title("Immagine originale")
+    axes[0].set_title("Original Image")
 
     axes[1].imshow(colored_prediction)
-    axes[1].set_title("Classi predette ERFNet")
+    axes[1].set_title("ERFNet Predicted Classes")
     axes[1].legend(
         handles=legend_handles,
         loc="upper center",
@@ -381,7 +392,7 @@ def save_semantic_prediction_visualization(
     )
 
     conf_plot = axes[2].imshow(confidence, cmap="viridis", vmin=0.0, vmax=1.0)
-    axes[2].set_title("Confidence classe predetta")
+    axes[2].set_title("Predicted Class Confidence")
     fig.colorbar(conf_plot, ax=axes[2], fraction=0.046, pad=0.04)
 
     for ax in axes:
@@ -501,6 +512,7 @@ def visualize_single_image(
     output_dir="visualizations_erfnet",
     mode="both",
     anomaly_score="softmax",
+    temperatures=None,
     min_region_pixels=500,
     max_regions=30,
 ):
@@ -518,15 +530,24 @@ def visualize_single_image(
     prediction, probabilities, confidence = compute_semantic_prediction_and_probabilities(logits)
 
     if mode in ("anomaly", "both"):
-        score_names = ("logit", "softmax", "entropy") if anomaly_score == "all" else (anomaly_score,)
+        if anomaly_score == "all":
+            score_names = list(anomaly_score_maps.keys())
+        else:
+            score_names = [anomaly_score]
+            if temperatures:
+                score_names.extend([f"msp_T_{t}" for t in temperatures])
+        
+        score_names = list(dict.fromkeys(score_names))
+        
         for score_name in score_names:
-            save_anomaly_visualization(
-                image_path=image_path,
-                output_path=output_paths[score_name],
-                score_name=score_name,
-                score_map=anomaly_score_maps[score_name],
-                original_image=original_image,
-            )
+            if score_name in anomaly_score_maps:
+                save_anomaly_visualization(
+                    image_path=image_path,
+                    output_path=output_paths[score_name],
+                    score_name=score_name,
+                    score_map=anomaly_score_maps[score_name],
+                    original_image=original_image,
+                )
 
     if mode in ("prediction", "both"):
         save_semantic_prediction_visualization(
@@ -643,7 +664,11 @@ def main():
     if not image_paths:
         raise FileNotFoundError(f"Nessuna immagine trovata con input: {args.input}")
 
-    metric_storage = create_empty_metric_storage()
+    score_keys = ["logit", "softmax", "entropy"]
+    if args.temperatures:
+        score_keys.extend([f"msp_T_{t}" for t in args.temperatures])
+        
+    metric_storage = create_empty_metric_storage(score_keys)
 
     for image_path in image_paths:
         print(f"Visualizzo: {image_path}")
@@ -654,6 +679,7 @@ def main():
             output_dir=args.output_dir,
             mode=args.mode,
             anomaly_score=args.anomaly_score,
+            temperatures=args.temperatures,
             min_region_pixels=args.min_region_pixels,
             max_regions=args.max_regions,
         )
@@ -666,9 +692,14 @@ def main():
             )
 
         if args.mode in ("anomaly", "both"):
-            score_names = ("logit", "softmax", "entropy") if args.anomaly_score == "all" else (args.anomaly_score,)
-            for score_name in score_names:
-                print(f"  {score_name} salvato in: {output_paths[score_name]}")
+            # Determina i file effettivamente generati
+            saved_scores = [args.anomaly_score] if args.anomaly_score != "all" else list(anomaly_score_maps.keys())
+            if args.temperatures and args.anomaly_score != "all":
+                saved_scores.extend([f"msp_T_{t}" for t in args.temperatures])
+            
+            for score_name in dict.fromkeys(saved_scores):
+                if score_name in output_paths:
+                    print(f"  {score_name} salvato in: {output_paths[score_name]}")
 
         if args.mode in ("prediction", "both"):
             print(f"  Predizione salvata in: {output_paths['prediction']}")
