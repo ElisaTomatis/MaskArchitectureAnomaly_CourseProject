@@ -52,16 +52,17 @@ def main():
         `results.txt`.
     """
     parser = ArgumentParser()
-    parser.add_argument("--input")  
+    parser.add_argument("--input") 
+    parser.add_argument("--weights_dir", default='/content/drive/MyDrive/ml_anomaly_segmentation/eomt_cityscapes.bin')   
     args = parser.parse_args()
 
     seed_everything(0, verbose=False)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")   # TODO: change to the GPU you want to use
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu") 
     config_path = 'configs/dinov2/cityscapes/semantic/eomt_base_640.yaml' 
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
-    state_dict_path = '/content/drive/MyDrive/ml_anomaly_segmentation/eomt_cityscapes.bin'
+    state_dict_path = args.weights_dir
     
     warnings.filterwarnings("ignore",
         message=r".*Attribute 'network' is an instance of `nn\.Module` and is already saved during checkpointing.*",
@@ -87,7 +88,7 @@ def main():
             image = input_transform((Image.open(path).convert('RGB'))).unsqueeze(0).float().cuda()
         image = image.squeeze(0)
         image = (image * 255).to(torch.uint8)
-        pixel_logits = compute_logits(image, device, model)
+        pixel_logits = compute_logits([image], device, model)
         
         anomaly_result_logit = 1.0 - np.max(pixel_logits.data.cpu().numpy(), axis=0)
         probs_tensor = F.softmax(pixel_logits.data.cpu(), dim=0)

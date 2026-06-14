@@ -72,6 +72,9 @@ def load_model(device, config, state_dict_path):
         state_dict = torch.load(
                     state_dict_path, map_location=f"cuda:{0}", weights_only=True
                 )
+        
+    if isinstance(state_dict, dict) and "state_dict" in state_dict:
+        state_dict = state_dict["state_dict"]
     model.load_state_dict(state_dict, strict=False)
     print('Model\'s weights loaded succesfully')
 
