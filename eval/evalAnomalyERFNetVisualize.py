@@ -425,7 +425,7 @@ def load_anomaly_ground_truth(image_path):
     return create_oodgts(mask, path_gt)
 
 
-def create_empty_metric_storage():
+def create_empty_metric_storage(score_keys):
     """
     Crea la struttura dati usata per accumulare ground truth e score anomaly.
 
@@ -434,10 +434,7 @@ def create_empty_metric_storage():
     """
     return {
         "ood_gts": [],
-        "anomaly_scores": {
-            "logit": [],
-            "softmax": [],
-            "entropy": [],
+        "anomaly_scores": {{k: [] for k in score_keys},
         },
     }
 
@@ -463,12 +460,13 @@ def add_image_to_metric_storage(image_path, anomaly_score_maps, metric_storage):
     metric_storage["ood_gts"].append(ood_gts)
 
     for score_name, score_map in anomaly_score_maps.items():
-        metric_storage["anomaly_scores"][score_name].append(score_map)
+        if score_name in metric_storage["anomaly_scores"]:
+            metric_storage["anomaly_scores"][score_name].append(score_map)
 
 
 def print_anomaly_metric_results(metric_storage):
     """
-    Calcola e stampa AUPRC e FPR@TPR95 per logit, softmax ed entropy.
+    Calcola e stampa AUPRC e FPR@TPR95 per logit, softmax (temperature) ed entropy.
 
     Se nessuna immagine valida e' stata accumulata, stampa un messaggio esplicito
     invece di chiamare le metriche su liste vuote.
@@ -477,13 +475,13 @@ def print_anomaly_metric_results(metric_storage):
         print("Metriche anomaly non calcolate: nessuna immagine valutabile con ground truth anomala.")
         return
 
-    for score_name in ("logit", "softmax", "entropy"):
+    for score_name in metric_storage["anomaly_scores"].keys():
         prc_auc, fpr = eval_score(
             metric_storage["ood_gts"],
             metric_storage["anomaly_scores"][score_name],
         )
-        print(f"AUPRC {score_name} score: {prc_auc * 100.0}")
-        print(f"FPR@TPR95 {score_name}: {fpr * 100.0}")
+        print(f"AUPRC {score_name} score: {prc_auc * 100.0:.2f}")
+        print(f"FPR@TPR95 {score_name}: {fpr * 100.0:.2f}")
 
 
 def build_output_paths(image_path, output_dir):
@@ -495,14 +493,16 @@ def build_output_paths(image_path, output_dir):
     """
     image_stem = Path(image_path).stem
     output_dir = Path(output_dir)
-
-    return {
-        "logit": output_dir / f"{image_stem}_logit.png",
-        "softmax": output_dir / f"{image_stem}_softmax.png",
-        "entropy": output_dir / f"{image_stem}_entropy.png",
+    
+    paths = {
         "prediction": output_dir / f"{image_stem}_prediction.png",
         "probabilities": output_dir / f"{image_stem}_predicted_regions_probabilities.csv",
     }
+    
+    for key in score_keys:
+        paths[key] = output_dir / f"{image_stem}_{key}.png"
+
+    return paths
 
 
 def visualize_single_image(
@@ -523,10 +523,11 @@ def visualize_single_image(
     segmentazione e confidence, salva gli output richiesti da `mode` e ritorna i
     path creati insieme alle mappe anomaly per eventuale valutazione aggregata.
     """
-    output_paths = build_output_paths(image_path, output_dir)
+    
     original_image, logits = compute_logits_for_image(image_path, model, device)
 
-    anomaly_score_maps = compute_anomaly_score_maps(logits)
+    anomaly_score_maps = compute_anomaly_score_maps(logits, temperatures)
+    output_paths = build_output_paths(image_path, output_dir, anomaly_score_maps.keys())
     prediction, probabilities, confidence = compute_semantic_prediction_and_probabilities(logits)
 
     if mode in ("anomaly", "both"):
@@ -625,6 +626,13 @@ def main():
         choices=["logit", "softmax", "entropy", "all"],
         default="softmax",
         help="Score anomaly da visualizzare quando mode e' anomaly/both.",
+    )
+    parser.add_argument(
+        "--temperatures",
+        type=float,
+        nargs="+",
+        default=None,
+        help="Lista di temperature per calcolare e stampare le relative mappe MSP.",
     )
     parser.add_argument(
         "--min-region-pixels",
