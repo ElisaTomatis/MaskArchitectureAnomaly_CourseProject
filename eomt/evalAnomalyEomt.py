@@ -70,9 +70,9 @@ def main():
 
     model = load_model(device, config, state_dict_path)
     
-    if not os.path.exists('results.txt'):
-        open('results.txt', 'w').close()
-    file = open('results.txt', 'w')
+    if not os.path.exists('results_finetuned.txt'):
+        open('results_finetuned.txt', 'w').close()
+    file = open('results_finetuned.txt', 'w')
 
     anomaly_score_logit_list = []
     anomaly_score_softmax_list = []
@@ -82,7 +82,7 @@ def main():
 
     for path in glob.glob(os.path.expanduser(str(args.input))):
         print(path)
-        if device == 'cpu':
+        if device == torch.device('cpu'):
             image = input_transform((Image.open(path).convert('RGB'))).unsqueeze(0).float()
         else:
             image = input_transform((Image.open(path).convert('RGB'))).unsqueeze(0).float().cuda()
