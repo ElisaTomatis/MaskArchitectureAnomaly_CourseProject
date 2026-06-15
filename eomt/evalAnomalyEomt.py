@@ -70,9 +70,9 @@ def main():
 
     model = load_model(device, config, state_dict_path)
     
-    if not os.path.exists('results_finetuned.txt'):
-        open('results_finetuned.txt', 'w').close()
-    file = open('results_finetuned.txt', 'w')
+    if not os.path.exists('/content/drive/MyDrive/ml_anomaly_segmentation/results_finetuned.txt'):
+        open('/content/drive/MyDrive/ml_anomaly_segmentation/results_finetuned.txt', 'w').close()
+    file = open('/content/drive/MyDrive/ml_anomaly_segmentation/results_finetuned.txt', 'a')
 
     anomaly_score_logit_list = []
     anomaly_score_softmax_list = []
@@ -138,7 +138,7 @@ def main():
     file.write(('    AUPRC logit score:' + str(prc_auc_logit*100.0) + '   FPR@TPR95 logit:' + str(fpr_logit*100.0) +
                 '\n    AUPRC softmax score:' + str(prc_auc_softmax*100.0) + '   FPR@TPR95 softmax:' + str(fpr_softmax*100.0) +
                 '\n    AUPRC entropy score:' + str(prc_auc_entropy*100.0) + '   FPR@TPR95 entropy:' + str(fpr_entropy*100.0) +
-                '\n    AUPRC rba score:' + str(prc_auc_rba*100.0) + '   FPR@TPR95 rba:' + str(fpr_rba*100.0)
+                '\n    AUPRC rba score:' + str(prc_auc_rba*100.0) + '   FPR@TPR95 rba:' + str(fpr_rba*100.0) + '\n'
                 ))
 
     file.close()
