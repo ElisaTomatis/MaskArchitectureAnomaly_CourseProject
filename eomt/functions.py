@@ -7,8 +7,6 @@ from torch.amp.autocast_mode import autocast
 from ood_metrics import fpr_at_95_tpr
 from sklearn.metrics import average_precision_score
 
-import matplotlib.pyplot as plt
-
 
 def load_model(device, config, state_dict_path):
     """
@@ -210,13 +208,6 @@ def eval_score(ood_gts_list, anomaly_score_list):
     
     ood_gts = np.array(ood_gts_list)
     anomaly_scores = np.array(anomaly_score_list)
-    
-    """im = plt.imshow(anomaly_scores[0,:,:], cmap='hot')
-    plt.colorbar(im, label='Punteggio Anomalia')
-
-    plt.axis('off') # Se vuoi nascondere le coordinate dei pixel
-    plt.savefig(f'anomalia_{counter}.png', bbox_inches='tight', pad_inches=0)
-    plt.close()"""
 
     ood_mask = (ood_gts == 1)
     ind_mask = (ood_gts == 0)

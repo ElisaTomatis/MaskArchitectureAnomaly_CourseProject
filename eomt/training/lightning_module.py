@@ -82,16 +82,12 @@ class LightningModule(lightning.LightningModule):
         self.weight_decay = weight_decay
         self.poly_power = poly_power
         self.warmup_steps = warmup_steps
-         # Seleziona lo scheduler da usare in configure_optimizers().
-        # Valori supportati:
-        # - "two_stage_warmup_poly": comportamento originale
-        # - "cosine_warmup": warmup lineare + cosine decay 
+        # Seleziona lo scheduler da usare in configure_optimizers().
         self.lr_scheduler = lr_scheduler
         # Percentuale degli step totali dedicata al warmup nel nuovo scheduler
-        # coseno. Il default 0.1 corrisponde al 10% richiesto.
         self.cosine_warmup_ratio = cosine_warmup_ratio
         # Learning rate finale come frazione del learning rate iniziale nel
-        # cosine decay. 0.0 significa decadimento fino a zero.
+        # cosine decay. 
         self.cosine_min_lr_ratio = cosine_min_lr_ratio
         self.llrd_l2_enabled = llrd_l2_enabled
 
@@ -213,8 +209,7 @@ class LightningModule(lightning.LightningModule):
         elif self.lr_scheduler == "cosine_warmup":
             # Nuovo scheduler per fine tuning breve: 10% degli step in warmup
             # lineare (configurabile con cosine_warmup_ratio) e resto in cosine
-            # decay. Usa gli stessi base_lr gia' presenti nei param group, quindi
-            # rispetta eventuali LR diversi o layer-wise decay.
+            # decay.
             scheduler = CosineWarmupSchedule(
                 optimizer,
                 total_steps=self.trainer.estimated_stepping_batches,

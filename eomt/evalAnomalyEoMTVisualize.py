@@ -100,10 +100,8 @@ def load_eomt_for_visualization(
 
     La funzione tiene separati `config_path` e `state_dict_path` per permettere di
     scegliere da riga di comando sia la configurazione sia il file `.bin` dei pesi.
-    Uso una stringa `"cuda"`/`"cpu"` come device, per restare compatibile con i
-    controlli presenti in `functions.load_model`.
     '''
-    # Fisso il seed come negli script di valutazione, così la pipeline resta riproducibile.
+    # Fisso il seed come negli script di valutazione
     seed_everything(0, verbose=False)
 
     # Scelgo automaticamente CUDA quando disponibile, altrimenti CPU.
@@ -114,22 +112,20 @@ def load_eomt_for_visualization(
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
 
-    # Nascondo il warning già gestito anche negli altri file di valutazione del progetto.
     warnings.filterwarnings(
         "ignore",
         message=r".*Attribute 'network' is an instance of `nn\.Module` and is already saved during checkpointing.*",
     )
 
-    # Costruisco il modello e carico i pesi `.bin` tramite la funzione condivisa.
+    # Costruisco il modello e carico i pesi `.bin`
     model = load_model(device, config, state_dict_path)
 
-    # Ritorno anche il device, così le funzioni successive non devono ricostruirlo.
     return model, device
 
 
-def load_image_like_eval_anomaly(image_path, device):
+def load_image(image_path, device):
     '''
-    Carica una immagine nello stesso formato usato da `evalAnomalyEoMT.py`.
+    Carica una immagine.
 
     L'immagine viene convertita in RGB, ridimensionata a 1024x1024, trasformata in
     tensore e riportata su scala 0-255 `uint8`, perché `window_imgs_semantic`
@@ -141,7 +137,7 @@ def load_image_like_eval_anomaly(image_path, device):
     # Applico la stessa trasformazione usata negli script di valutazione.
     image_tensor = input_transform(original_image).float()
 
-    # Riporto il tensore su scala 0-255 e tipo uint8, come in `evalAnomalyEoMT.py`.
+    # Riporto il tensore su scala 0-255 e tipo uint8
     image_tensor = (image_tensor * 255).to(torch.uint8)
 
     # Sposto l'immagine sul device del modello solo dopo aver preservato l'originale PIL.
@@ -155,12 +151,12 @@ def compute_pixel_logits_for_image(image_path, model, device):
     '''
     Esegue l'inferenza EoMT su una singola immagine e restituisce i logits pixel-wise.
 
-    Questa funzione passa davvero dal modello EoMT e usa `compute_logits`, quindi
+    Questa funzione passa dal modello EoMT e usa `compute_logits`, quindi
     include tutta la logica dei crop/finestrature (`window_imgs_semantic`) e della
     ricomposizione (`revert_window_logits_semantic`).
     '''
     # Carico l'immagine con la stessa pipeline degli script di valutazione anomalie.
-    original_image, image_tensor = load_image_like_eval_anomaly(image_path, device)
+    original_image, image_tensor = load_image(image_path, device)
 
     # Disabilito il calcolo dei gradienti perché qui facciamo solo inferenza/visualizzazione.
     with torch.no_grad():
@@ -190,29 +186,24 @@ def compute_rba_anomaly_score(pixel_logits):
 
 def compute_anomaly_score_maps(pixel_logits):
     '''
-    Calcola le quattro mappe di anomaly score usate da `evalAnomalyEoMT.py`.
-
-    Le formule sono mantenute identiche allo script di valutazione originale:
-    logit, softmax, entropy e RbA vengono calcolati sui logits pixel-wise
-    restituiti dal modello EoMT.
+    Calcola le quattro mappe di anomaly score.
     '''
     # Porto i logits su CPU una sola volta, cosi tutte le metriche usano gli stessi valori.
     logits_cpu = pixel_logits.detach().cpu()
 
-    # Score logit: uno meno il massimo logit tra le classi per ogni pixel.
+    # Score logit
     anomaly_result_logit = 1.0 - np.max(logits_cpu.numpy(), axis=0)
 
-    # Score softmax: uno meno la massima probabilita softmax per pixel.
+    # Score softmax
     probs_tensor = F.softmax(logits_cpu, dim=0)
     anomaly_result_softmax = 1.0 - np.max(probs_tensor.numpy(), axis=0)
 
-    # Score entropy: entropia della distribuzione softmax pixel-wise.
+    # Score entropy
     anomaly_result_entropy = -torch.sum(probs_tensor * torch.log(probs_tensor), dim=0).numpy()
 
-    # Score RbA: stessa formula gia usata per la heatmap visuale.
+    # Score RbA
     anomaly_result_rba = -torch.sum(torch.tanh(logits_cpu), dim=0).numpy()
 
-    # Ritorno un dizionario, cosi il chiamante puo accumulare le metriche per nome.
     return {
         "logit": anomaly_result_logit,
         "softmax": anomaly_result_softmax,
@@ -224,10 +215,6 @@ def compute_anomaly_score_maps(pixel_logits):
 def load_anomaly_ground_truth(image_path):
     '''
     Carica la maschera ground-truth OOD associata a una immagine.
-
-    Il path e la conversione della maschera sono gli stessi usati in
-    `evalAnomalyEoMT.py`, cosi le metriche finali restano confrontabili con lo
-    script di valutazione originale.
     '''
     # Ricavo il path della maschera a partire dal path dell'immagine.
     path_gt = create_pathGT(image_path)
@@ -243,9 +230,6 @@ def load_anomaly_ground_truth(image_path):
 def create_empty_metric_storage():
     '''
     Prepara le liste in cui accumulare ground truth e anomaly score.
-
-    La struttura rispecchia le quattro metriche di `evalAnomalyEoMT.py`, ma usa
-    un dizionario per tenere il codice piu compatto e leggibile.
     '''
     # Ogni chiave contiene le mappe score delle immagini valutabili.
     anomaly_scores = {
@@ -265,9 +249,6 @@ def create_empty_metric_storage():
 def add_image_to_metric_storage(image_path, anomaly_score_maps, metric_storage):
     '''
     Aggiunge una immagine alle liste usate per calcolare AUPRC e FPR@TPR95.
-
-    Come in `evalAnomalyEoMT.py`, le immagini senza pixel anomali vengono scartate
-    dalle metriche, perche non contribuiscono alla valutazione OOD.
     '''
     # Carico la ground truth OOD corrispondente all'immagine appena visualizzata.
     ood_gts = load_anomaly_ground_truth(image_path)
@@ -277,7 +258,7 @@ def add_image_to_metric_storage(image_path, anomaly_score_maps, metric_storage):
         print("  Metriche saltate: la ground truth non contiene anomalie.")
         return
 
-    # Accumulo la maschera ground truth una sola volta.
+    # Accumulo la maschera ground truth
     metric_storage["ood_gts"].append(ood_gts)
 
     # Accumulo tutte le mappe score nello stesso ordine della ground truth.
@@ -288,17 +269,12 @@ def add_image_to_metric_storage(image_path, anomaly_score_maps, metric_storage):
 def print_anomaly_metric_results(metric_storage):
     '''
     Calcola e stampa AUPRC e FPR@TPR95 per tutte le anomaly score map.
-
-    L'output a terminale mantiene lo stesso formato di `evalAnomalyEoMT.py`: se
-    e stata valutata una sola immagine, i valori sono relativi solo a quella;
-    altrimenti sono calcolati sull'insieme di tutte le immagini accumulate.
     '''
     # Se nessuna immagine ha una ground truth valutabile, non posso calcolare le metriche.
     if not metric_storage["ood_gts"]:
         print("Metriche anomaly non calcolate: nessuna immagine contiene anomalie nella ground truth.")
         return
 
-    # Calcolo le metriche con la stessa funzione condivisa dello script eval.
     prc_auc_logit, fpr_logit = eval_score(
         metric_storage["ood_gts"],
         metric_storage["anomaly_scores"]["logit"],
@@ -316,7 +292,6 @@ def print_anomaly_metric_results(metric_storage):
         metric_storage["anomaly_scores"]["rba"],
     )
 
-    # Stampo i risultati nello stesso ordine e con le stesse etichette di `evalAnomalyEoMT.py`.
     print(f"AUPRC logit score: {prc_auc_logit * 100.0}")
     print(f"FPR@TPR95 logit: {fpr_logit * 100.0}")
 
@@ -462,7 +437,7 @@ def compute_semantic_prediction_and_probabilities(pixel_logits):
     # La confidence è la probabilità della classe vincente in ogni pixel.
     confidence = torch.max(probabilities, dim=0).values.numpy()
 
-    # Ritorno anche le probabilità complete, utili per le analisi per regione.
+    # Ritorno anche le probabilità complete
     return prediction, probabilities.numpy(), confidence
 
 

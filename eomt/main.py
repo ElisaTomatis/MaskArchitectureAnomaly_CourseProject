@@ -7,8 +7,6 @@
 # ---------------------------------------------------------------
 
 
-
-import jsonargparse._typehints as _t
 import os
 from types import MethodType
 from pathlib import Path
@@ -70,7 +68,7 @@ def _find_model_checkpoint_callback(trainer) -> ModelCheckpoint | None:
 
 def _format_hparam_for_filename(value) -> str:
     """
-    Converte un iperparametro in una stringa sicura da usare nei nomi file.
+    Converte un iperparametro in una stringa da usare nei nomi file.
 
     I caratteri che possono creare problemi nei nomi dei checkpoint vengono
     sostituiti con rappresentazioni compatibili.
@@ -85,58 +83,6 @@ def _format_hparam_for_filename(value) -> str:
     if isinstance(value, float):
         value = f"{value:.6g}"
     return str(value).replace("-", "m").replace("+", "").replace(".", "p")
-
-
-_orig_single = _t.raise_unexpected_value
-
-
-def _raise_single(*args, exception=None, **kwargs):
-    """
-    Propaga l'eccezione originale prodotta da jsonargparse.
-
-    Questa patch evita che alcuni errori di validazione dei tipi vengano
-    sostituiti da messaggi meno informativi.
-
-    Args:
-        *args: Argomenti inoltrati alla funzione originale.
-        exception: Eccezione eventualmente prodotta dal parser.
-        **kwargs: Argomenti keyword inoltrati alla funzione originale.
-
-    Returns:
-        Risultato della funzione originale quando non viene sollevata
-        alcuna eccezione.
-    """
-    if isinstance(exception, Exception):
-        raise exception
-    return _orig_single(*args, exception=exception, **kwargs)
-
-
-_orig_union = _t.raise_union_unexpected_value
-
-
-def _raise_union(subtypes, val, vals):
-    """
-    Propaga l'errore più specifico durante la validazione di tipi union.
-
-    Quando jsonargparse prova più sottotipi, questa funzione restituisce
-    l'eccezione più informativa disponibile.
-
-    Args:
-        subtypes: Tipi ammessi dalla union.
-        val: Valore da validare.
-        vals: Risultati o eccezioni dei tentativi di validazione.
-
-    Returns:
-        Risultato della funzione originale se non sono presenti eccezioni.
-    """
-    for e in reversed(vals):
-        if isinstance(e, Exception):
-            raise e
-    return _orig_union(subtypes, val, vals)
-
-
-_t.raise_unexpected_value = _raise_single
-_t.raise_union_unexpected_value = _raise_union
 
 
 def _should_check_val_fx(self: _TrainingEpochLoop, data_fetcher: _DataFetcher) -> bool:
@@ -290,9 +236,8 @@ class LightningCLI(cli.LightningCLI):
         Avvia il training configurando logging, checkpoint e resume automatico.
 
         Prima dell'addestramento registra il codice sorgente, aggiorna la
-        configurazione dei checkpoint, applica la logica personalizzata di
-        validazione e riprende automaticamente dall'ultimo checkpoint se
-        disponibile.
+        configurazione dei checkpoint e riprende automaticamente dall'ultimo 
+        checkpoint se disponibile.
 
         Args:
             model: Modello Lightning da addestrare.
