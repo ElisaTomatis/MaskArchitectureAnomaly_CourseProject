@@ -90,7 +90,7 @@ target_transform = Compose(
 )
 
 
-def load_eomt_for_visualization(
+def load_eomt(
     config_path="configs/dinov2/cityscapes/semantic/eomt_base_640.yaml",
     state_dict_path="/content/drive/MyDrive/ml_anomaly_segmentation/eomt_cityscapes.bin",
     device=None,
@@ -532,9 +532,6 @@ def expand_input_paths(input_patterns):
 
 
 def main():
-    '''
-    Entry point da riga di comando per visualizzare immagini con EoMT.
-    '''
     parser = ArgumentParser()
     parser.add_argument(
         "--input", 
@@ -601,7 +598,7 @@ def main():
     )
     args = parser.parse_args()
 
-    model, device = load_eomt_for_visualization(
+    model, device = load_eomt(
         config_path=args.config_path,
         state_dict_path=args.state_dict_path,
         device=args.device,
