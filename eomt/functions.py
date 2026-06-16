@@ -62,14 +62,10 @@ def load_model(device, config, state_dict_path):
         .to(device)
     )
 
-    if device == torch.device('cpu'):
-        state_dict = torch.load(
-                    state_dict_path, map_location="cpu", weights_only=True
-                )
+    if str(device) == "cpu":
+      state_dict = torch.load(state_dict_path, map_location="cpu", weights_only=True)
     else:
-        state_dict = torch.load(
-                    state_dict_path, map_location=f"cuda:{0}", weights_only=True
-                )
+      state_dict = torch.load(state_dict_path, map_location="cuda:0", weights_only=True)
         
     if isinstance(state_dict, dict) and "state_dict" in state_dict:
         state_dict = state_dict["state_dict"]

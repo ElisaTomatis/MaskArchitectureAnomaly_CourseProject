@@ -97,18 +97,17 @@ def load_eomt_for_visualization(
 ):
     '''
     Carica il modello EoMT nello stesso modo usato negli script di valutazione.
-
-    La funzione tiene separati `config_path` e `state_dict_path` per permettere di
-    scegliere da riga di comando sia la configurazione sia il file `.bin` dei pesi.
     '''
-    # Fisso il seed come negli script di valutazione
     seed_everything(0, verbose=False)
 
-    # Scelgo automaticamente CUDA quando disponibile, altrimenti CPU.
-    if device is None:
+    # Se device è "cpu" o CUDA non è disponibile, usa "cpu". 
+    # Se viene richiesto "cuda" ma non è disponibile, la logica di fallback previene il crash.
+    if device == "cuda" and not torch.cuda.is_available():
+        print("Warning: CUDA richiesto ma non disponibile. Switch su CPU.")
+        device = "cpu"
+    elif device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    # Leggo la configurazione EoMT, che contiene classi Python e iperparametri del modello.
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
 
@@ -117,383 +116,138 @@ def load_eomt_for_visualization(
         message=r".*Attribute 'network' is an instance of `nn\.Module` and is already saved during checkpointing.*",
     )
 
-    # Costruisco il modello e carico i pesi `.bin`
+    # Viene passato il device corretto (stringa 'cpu' o 'cuda') che verrà usato in map_location
     model = load_model(device, config, state_dict_path)
-
     return model, device
 
 
-def load_image(image_path, device):
+def load_image_like_eval_anomaly(image_path, device):
     '''
-    Carica una immagine.
-
-    L'immagine viene convertita in RGB, ridimensionata a 1024x1024, trasformata in
-    tensore e riportata su scala 0-255 `uint8`, perché `window_imgs_semantic`
-    ricostruisce internamente immagini PIL a partire dal tensore.
+    Carica una immagine nello stesso formato usato da evalAnomalyEoMT.
     '''
-    # Apro l'immagine originale in RGB, evitando problemi con immagini in grayscale o RGBA.
     original_image = Image.open(image_path).convert("RGB")
-
-    # Applico la stessa trasformazione usata negli script di valutazione.
     image_tensor = input_transform(original_image).float()
-
-    # Riporto il tensore su scala 0-255 e tipo uint8
     image_tensor = (image_tensor * 255).to(torch.uint8)
-
-    # Sposto l'immagine sul device del modello solo dopo aver preservato l'originale PIL.
     image_tensor = image_tensor.to(device)
 
-    # Ritorno sia l'immagine originale sia il tensore pronto per EoMT.
     return original_image, image_tensor
 
 
 def compute_pixel_logits_for_image(image_path, model, device):
     '''
     Esegue l'inferenza EoMT su una singola immagine e restituisce i logits pixel-wise.
-
-    Questa funzione passa dal modello EoMT e usa `compute_logits`, quindi
-    include tutta la logica dei crop/finestrature (`window_imgs_semantic`) e della
-    ricomposizione (`revert_window_logits_semantic`).
     '''
-    # Carico l'immagine con la stessa pipeline degli script di valutazione anomalie.
-    original_image, image_tensor = load_image(image_path, device)
+    original_image, image_tensor = load_image_like_eval_anomaly(image_path, device)
 
-    # Disabilito il calcolo dei gradienti perché qui facciamo solo inferenza/visualizzazione.
     with torch.no_grad():
-        # `compute_logits` si aspetta una lista/batch di immagini: qui ne passiamo una sola.
         pixel_logits = compute_logits([image_tensor], device, model)
 
-    # Ritorno l'immagine originale e i logits, mantenendo i logits su device per eventuali elaborazioni.
     return original_image, pixel_logits
 
 
-def compute_rba_anomaly_score(pixel_logits):
+def compute_anomaly_score_maps(pixel_logits, temperatures=None):
     '''
-    Calcola lo score di anomalia RbA a partire dai logits pixel-wise.
-
-    La formula è la stessa usata in `evalAnomalyEoMT.py`:
-    `RbA = - sum_c tanh(logit_c)`. Valori più alti indicano pixel più sospetti.
+    Calcola le mappe di anomaly score usate da evalAnomalyEoMT e genera le mappe MSP.
     '''
-    # Porto i logits su CPU e stacco il grafo per trasformarli in una mappa NumPy.
     logits_cpu = pixel_logits.detach().cpu()
 
-    # Applico esattamente la formula RbA usata nello script di valutazione.
-    anomaly_score_rba = -torch.sum(torch.tanh(logits_cpu), dim=0).numpy()
-
-    # Restituisco una matrice HxW pronta per essere visualizzata con matplotlib.
-    return anomaly_score_rba
-
-
-def compute_anomaly_score_maps(pixel_logits):
-    '''
-    Calcola le quattro mappe di anomaly score.
-    '''
-    # Porto i logits su CPU una sola volta, cosi tutte le metriche usano gli stessi valori.
-    logits_cpu = pixel_logits.detach().cpu()
-
-    # Score logit
     anomaly_result_logit = 1.0 - np.max(logits_cpu.numpy(), axis=0)
-
-    # Score softmax
+    
     probs_tensor = F.softmax(logits_cpu, dim=0)
     anomaly_result_softmax = 1.0 - np.max(probs_tensor.numpy(), axis=0)
-
-    # Score entropy
-    anomaly_result_entropy = -torch.sum(probs_tensor * torch.log(probs_tensor), dim=0).numpy()
-
-    # Score RbA
+    
+    anomaly_result_entropy = -torch.sum(probs_tensor * torch.log(probs_tensor.clamp_min(1e-12)), dim=0).numpy()
+    
     anomaly_result_rba = -torch.sum(torch.tanh(logits_cpu), dim=0).numpy()
 
-    return {
+    maps = {
         "logit": anomaly_result_logit,
         "softmax": anomaly_result_softmax,
         "entropy": anomaly_result_entropy,
         "rba": anomaly_result_rba,
     }
 
+    if temperatures:
+        for t in temperatures:
+            logits_t = logits_cpu / t
+            probs_t = F.softmax(logits_t, dim=0)
+            anomaly_t = 1.0 - np.max(probs_t.numpy(), axis=0)
+            maps[f"msp_T_{t}"] = anomaly_t
 
-def load_anomaly_ground_truth(image_path):
-    '''
-    Carica la maschera ground-truth OOD associata a una immagine.
-    '''
-    # Ricavo il path della maschera a partire dal path dell'immagine.
-    path_gt = create_pathGT(image_path)
-
-    # Ridimensiono la maschera con nearest-neighbor, preservando gli ID delle classi.
-    mask = Image.open(path_gt)
-    mask = target_transform(mask)
-
-    # Converto la maschera nel formato binario OOD/IND usato da `eval_score`.
-    return create_oodgts(mask, path_gt)
-
-
-def create_empty_metric_storage():
-    '''
-    Prepara le liste in cui accumulare ground truth e anomaly score.
-    '''
-    # Ogni chiave contiene le mappe score delle immagini valutabili.
-    anomaly_scores = {
-        "logit": [],
-        "softmax": [],
-        "entropy": [],
-        "rba": [],
-    }
-
-    # La ground truth resta una lista separata, condivisa da tutte le metriche.
-    return {
-        "ood_gts": [],
-        "anomaly_scores": anomaly_scores,
-    }
-
-
-def add_image_to_metric_storage(image_path, anomaly_score_maps, metric_storage):
-    '''
-    Aggiunge una immagine alle liste usate per calcolare AUPRC e FPR@TPR95.
-    '''
-    # Carico la ground truth OOD corrispondente all'immagine appena visualizzata.
-    ood_gts = load_anomaly_ground_truth(image_path)
-
-    # Mantengo lo stesso comportamento dello script originale: scarto immagini senza anomalie.
-    if 1 not in np.unique(ood_gts):
-        print("  Metriche saltate: la ground truth non contiene anomalie.")
-        return
-
-    # Accumulo la maschera ground truth
-    metric_storage["ood_gts"].append(ood_gts)
-
-    # Accumulo tutte le mappe score nello stesso ordine della ground truth.
-    for score_name, score_map in anomaly_score_maps.items():
-        metric_storage["anomaly_scores"][score_name].append(score_map)
-
-
-def print_anomaly_metric_results(metric_storage):
-    '''
-    Calcola e stampa AUPRC e FPR@TPR95 per tutte le anomaly score map.
-    '''
-    # Se nessuna immagine ha una ground truth valutabile, non posso calcolare le metriche.
-    if not metric_storage["ood_gts"]:
-        print("Metriche anomaly non calcolate: nessuna immagine contiene anomalie nella ground truth.")
-        return
-
-    prc_auc_logit, fpr_logit = eval_score(
-        metric_storage["ood_gts"],
-        metric_storage["anomaly_scores"]["logit"],
-    )
-    prc_auc_softmax, fpr_softmax = eval_score(
-        metric_storage["ood_gts"],
-        metric_storage["anomaly_scores"]["softmax"],
-    )
-    prc_auc_entropy, fpr_entropy = eval_score(
-        metric_storage["ood_gts"],
-        metric_storage["anomaly_scores"]["entropy"],
-    )
-    prc_auc_rba, fpr_rba = eval_score(
-        metric_storage["ood_gts"],
-        metric_storage["anomaly_scores"]["rba"],
-    )
-
-    print(f"AUPRC logit score: {prc_auc_logit * 100.0}")
-    print(f"FPR@TPR95 logit: {fpr_logit * 100.0}")
-
-    print(f"AUPRC softmax score: {prc_auc_softmax * 100.0}")
-    print(f"FPR@TPR95 softmax: {fpr_softmax * 100.0}")
-
-    print(f"AUPRC entropy score: {prc_auc_entropy * 100.0}")
-    print(f"FPR@TPR95 entropy: {fpr_entropy * 100.0}")
-
-    print(f"AUPRC rba score: {prc_auc_rba * 100.0}")
-    print(f"FPR@TPR95 rba: {fpr_rba * 100.0}")
+    return maps
 
 
 def normalize_map(score_map):
     '''
-    Normalizza una mappa numerica nell'intervallo [0, 1] per usarla come overlay.
-
-    La normalizzazione è solo grafica: non modifica lo score RbA originale e non
-    viene usata per metriche o decisioni quantitative.
+    Normalizza una mappa numerica in [0, 1] per renderla come overlay grafico.
     '''
-    # Converto a float32 per evitare cast impliciti durante la normalizzazione.
     score_map = score_map.astype(np.float32)
-
-    # Calcolo min e max ignorando eventuali valori non finiti.
     min_value = np.nanmin(score_map)
     max_value = np.nanmax(score_map)
 
-    # Evito divisioni per zero quando la mappa è costante.
     if np.isclose(max_value, min_value):
         return np.zeros_like(score_map, dtype=np.float32)
 
-    # Porto la mappa nell'intervallo [0, 1].
     return (score_map - min_value) / (max_value - min_value)
 
 
 def resize_original_for_plot(original_image, size=(1024, 1024)):
     '''
-    Ridimensiona l'immagine originale alla dimensione usata dal modello.
-
-    Questo rende sovrapponibili immagine, heatmap RbA e segmentazione predetta.
+    Ridimensiona l'immagine originale alla risoluzione delle mappe predette.
     '''
-    # Matplotlib lavora comodamente con array NumPy RGB.
     resized = original_image.resize(size, Image.BILINEAR)
-
-    # Converto da PIL a NumPy mantenendo valori RGB 0-255.
     return np.array(resized)
-
-
-def save_rba_anomaly_visualization(
-    image_path,
-    model,
-    device,
-    output_path,
-    pixel_logits=None,
-):
-    '''
-    Salva una figura con immagine originale, heatmap RbA e overlay RbA.
-
-    Se `pixel_logits` viene passato dall'esterno, la funzione lo riusa per evitare
-    una seconda inferenza sulla stessa immagine. Altrimenti carica l'immagine,
-    passa dal modello e calcola i logits con tutta la pipeline dei crop.
-    '''
-    # Se i logits non sono già disponibili, eseguo l'inferenza completa sul modello.
-    if pixel_logits is None:
-        original_image, pixel_logits = compute_pixel_logits_for_image(image_path, model, device)
-    else:
-        original_image = Image.open(image_path).convert("RGB")
-
-    # Calcolo la mappa RbA usando la stessa formula dello script di valutazione.
-    rba_score = compute_rba_anomaly_score(pixel_logits)
-
-    # Creo una versione normalizzata solo per l'overlay visivo.
-    normalized_rba = normalize_map(rba_score)
-
-    # Preparo l'immagine RGB originale nella stessa dimensione dei logits.
-    original_np = resize_original_for_plot(original_image, size=(rba_score.shape[1], rba_score.shape[0]))
-
-    # Creo una figura a tre pannelli: input, score puro, overlay leggibile.
-    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
-
-    # Primo pannello: immagine originale ridimensionata come vista dal modello.
-    axes[0].imshow(original_np)
-    axes[0].set_title("Immagine originale")
-
-    # Secondo pannello: heatmap RbA con colorbar, utile per leggere valori relativi.
-    heatmap = axes[1].imshow(rba_score, cmap="hot")
-    axes[1].set_title("Score anomalia RbA")
-    fig.colorbar(heatmap, ax=axes[1], fraction=0.046, pad=0.04)
-
-    # Terzo pannello: overlay RbA sull'immagine, più facile da interpretare visivamente.
-    axes[2].imshow(original_np)
-    axes[2].imshow(normalized_rba, cmap="hot", alpha=0.45)
-    axes[2].set_title("Overlay RbA")
-
-    # Rimuovo gli assi da tutti i pannelli per produrre immagini pulite.
-    for ax in axes:
-        ax.axis("off")
-
-    # Creo la cartella di destinazione se non esiste.
-    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-
-    # Salvo la figura finale su disco.
-    plt.tight_layout()
-    plt.savefig(output_path, bbox_inches="tight", dpi=200)
-    plt.close(fig)
-
-    # Ritorno score e logits per eventuale riuso o debugging.
-    return rba_score, pixel_logits
 
 
 def colorize_semantic_prediction(prediction):
     '''
-    Trasforma una maschera di classi Cityscapes in una immagine RGB colorata.
-
-    Ogni ID di classe 0-18 viene mappato sulla palette standard Cityscapes, così
-    la visualizzazione è stabile e confrontabile tra immagini diverse.
+    Converte una mappa di classi Cityscapes in una immagine RGB.
     '''
-    # Creo un'immagine RGB vuota con la stessa altezza/larghezza della predizione.
     colored_prediction = np.zeros((*prediction.shape, 3), dtype=np.uint8)
 
-    # Assegno il colore Cityscapes corrispondente a ogni classe predetta.
     for class_id, color in enumerate(CITYSCAPES_PALETTE):
         colored_prediction[prediction == class_id] = color
 
-    # Restituisco la maschera RGB pronta per matplotlib o PIL.
     return colored_prediction
 
 
 def compute_semantic_prediction_and_probabilities(pixel_logits):
     '''
-    Calcola predizione semantica, softmax e confidence per pixel.
-
-    Le probabilità sono pixel-wise, perché EoMT semantic produce logits per ogni
-    classe e per ogni pixel. Le statistiche per regione vengono costruite dopo
-    aggregando queste probabilità sui pixel della stessa regione predetta.
+    Ricava predizione semantica, probabilita' e confidence dai logits EoMT.
     '''
-    # Calcolo la softmax lungo la dimensione delle classi.
     probabilities = F.softmax(pixel_logits.detach().cpu(), dim=0)
-
-    # La classe predetta è l'argmax della probabilità per ogni pixel.
     prediction = torch.argmax(probabilities, dim=0).numpy().astype(np.uint8)
-
-    # La confidence è la probabilità della classe vincente in ogni pixel.
     confidence = torch.max(probabilities, dim=0).values.numpy()
-
-    # Ritorno anche le probabilità complete
+    
     return prediction, probabilities.numpy(), confidence
 
 
-def summarize_predicted_regions(
-    prediction,
-    probabilities,
-    min_region_pixels=500,
-    max_regions=30,
-):
+def summarize_predicted_regions(prediction, probabilities, min_region_pixels=500, max_regions=30):
     '''
-    Aggrega le probabilità pixel-wise su regioni connesse predette dal modello.
-
-    Questa è la risposta più fedele alla domanda sulle "probabilità degli oggetti":
-    il modello semantic non produce istanze/oggetti, quindi identifichiamo regioni
-    connesse della stessa classe predetta e calcoliamo la distribuzione media delle
-    probabilità Cityscapes dentro ciascuna regione.
+    Riassume le regioni connesse predette dal modello in righe da salvare su CSV.
     '''
-    # Preparo la struttura in cui accumulare le statistiche delle regioni trovate.
     region_rows = []
-
-    # Uso connettività 8-neighbor per considerare connessi pixel che si toccano anche in diagonale.
     structure = np.ones((3, 3), dtype=np.uint8)
 
-    # Analizzo separatamente ogni classe Cityscapes presente nella predizione.
     for class_id in np.unique(prediction):
-        # Creo una maschera binaria per la classe corrente.
         class_mask = prediction == class_id
-
-        # Etichetto le componenti connesse della classe corrente.
         labeled_regions, num_regions = ndimage.label(class_mask, structure=structure)
 
-        # Scorro tutte le componenti connesse individuate da scipy.
         for region_id in range(1, num_regions + 1):
-            # Isolo i pixel della regione corrente.
             region_mask = labeled_regions == region_id
-
-            # Calcolo l'area in pixel della regione.
             area_pixels = int(region_mask.sum())
 
-            # Scarto regioni molto piccole, spesso rumore o dettagli non leggibili.
             if area_pixels < min_region_pixels:
                 continue
 
-            # Calcolo la probabilità media di ciascuna classe dentro la regione.
             mean_probabilities = probabilities[:, region_mask].mean(axis=1)
-
-            # Ordino le classi dalla più probabile alla meno probabile nella regione.
             sorted_ids = np.argsort(mean_probabilities)[::-1]
-
-            # Preparo una sintesi top-5 leggibile, oltre alle 19 probabilità complete.
+            
             top5 = "; ".join(
                 f"{CITYSCAPES_CLASSES[idx]}={mean_probabilities[idx]:.4f}"
                 for idx in sorted_ids[:5]
             )
 
-            # Aggiungo una riga con metadati e distribuzione completa.
             row = {
                 "predicted_class_id": int(class_id),
                 "predicted_class_name": CITYSCAPES_CLASSES[int(class_id)],
@@ -502,32 +256,22 @@ def summarize_predicted_regions(
                 "top5_mean_probabilities": top5,
             }
 
-            # Inserisco anche una colonna per ciascuna classe, utile per analisi successive.
             for idx, class_name in enumerate(CITYSCAPES_CLASSES):
-                row[f"prob_{idx:02d}_{class_name.replace(' ', '_')}"] = float(mean_probabilities[idx])
+                safe_class_name = class_name.replace(" ", "_")
+                row[f"prob_{idx:02d}_{safe_class_name}"] = float(mean_probabilities[idx])
 
-            # Salvo la riga nella lista complessiva.
             region_rows.append(row)
 
-    # Ordino le regioni per area decrescente, così le componenti più importanti vengono prima.
     region_rows.sort(key=lambda row: row["area_pixels"], reverse=True)
-
-    # Limito il numero di regioni salvate per non produrre CSV enormi su immagini rumorose.
     return region_rows[:max_regions]
 
 
 def save_region_probability_csv(region_rows, output_csv_path):
     '''
-    Salva su CSV le probabilità medie per regione predetta.
-
-    Il CSV contiene una riga per ogni regione connessa sopra soglia e una colonna
-    per ciascuna delle 19 classi Cityscapes, così puoi verificare se una zona
-    anomala viene predetta con alta sicurezza o con probabilità più uniformi.
+    Salva su CSV le probabilita' medie delle regioni predette.
     '''
-    # Creo la cartella di output prima di aprire il file.
     Path(output_csv_path).parent.mkdir(parents=True, exist_ok=True)
 
-    # Se non ci sono regioni sopra soglia, salvo comunque un CSV minimale.
     if not region_rows:
         with open(output_csv_path, "w", newline="") as f:
             writer = csv.writer(f)
@@ -535,50 +279,58 @@ def save_region_probability_csv(region_rows, output_csv_path):
             writer.writerow(["No predicted regions passed the min_region_pixels threshold."])
         return
 
-    # Ricavo l'header dalle chiavi della prima riga.
-    fieldnames = list(region_rows[0].keys())
-
-    # Scrivo tutte le righe in formato CSV.
     with open(output_csv_path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer = csv.DictWriter(f, fieldnames=list(region_rows[0].keys()))
         writer.writeheader()
         writer.writerows(region_rows)
 
 
+def save_anomaly_visualization(image_path, output_path, score_name, score_map, original_image):
+    '''
+    Crea una figura PNG per una mappa anomaly (allineato alla logica ERFNet).
+    '''
+    normalized_score = normalize_map(score_map)
+    original_np = resize_original_for_plot(original_image, size=(score_map.shape[1], score_map.shape[0]))
+
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+
+    axes[0].imshow(original_np)
+    axes[0].set_title("Original Image")
+
+    heatmap = axes[1].imshow(score_map, cmap="hot")
+    axes[1].set_title(f"Anomaly Score {score_name}")
+    fig.colorbar(heatmap, ax=axes[1], fraction=0.046, pad=0.04)
+
+    axes[2].imshow(original_np)
+    axes[2].imshow(normalized_score, cmap="hot", alpha=0.45)
+    axes[2].set_title(f"Overlay {score_name}")
+
+    for ax in axes:
+        ax.axis("off")
+
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    plt.tight_layout()
+    plt.savefig(output_path, bbox_inches="tight", dpi=200)
+    plt.close(fig)
+
+
 def save_semantic_prediction_visualization(
     image_path,
-    model,
-    device,
     output_path,
-    probability_csv_path=None,
+    probability_csv_path,
+    original_image,
+    prediction,
+    probabilities,
+    confidence,
     min_region_pixels=500,
     max_regions=30,
-    pixel_logits=None,
 ):
     '''
-    Salva una figura con immagine originale e classi predette dal modello.
-
-    La figura contiene immagine originale, segmentazione colorata e confidence map.
-    Se `probability_csv_path` non è `None`, viene salvato anche un CSV con le
-    probabilità medie delle 19 classi per ogni regione predetta sufficientemente
-    grande.
+    Salva la visualizzazione semantica e il CSV delle probabilita' (allineato alla logica ERFNet).
     '''
-    # Se i logits non sono già disponibili, eseguo l'inferenza completa sul modello.
-    if pixel_logits is None:
-        original_image, pixel_logits = compute_pixel_logits_for_image(image_path, model, device)
-    else:
-        original_image = Image.open(image_path).convert("RGB")
-
-    # Calcolo predizione semantica, probabilità complete e confidence per pixel.
-    prediction, probabilities, confidence = compute_semantic_prediction_and_probabilities(pixel_logits)
-
-    # Converto la maschera predetta in una immagine RGB con palette Cityscapes.
     colored_prediction = colorize_semantic_prediction(prediction)
-
-    # Recupero le classi effettivamente presenti, così la legenda resta compatta.
     present_classes = np.unique(prediction)
 
-    # Costruisco gli elementi della legenda usando gli stessi colori della maschera.
     legend_handles = [
         Patch(
             facecolor=CITYSCAPES_PALETTE[class_id] / 255.0,
@@ -588,19 +340,15 @@ def save_semantic_prediction_visualization(
         for class_id in present_classes
     ]
 
-    # Preparo l'immagine originale nella stessa dimensione della predizione.
     original_np = resize_original_for_plot(original_image, size=(prediction.shape[1], prediction.shape[0]))
 
-    # Creo una figura a tre pannelli: input, predizione colorata, confidence.
     fig, axes = plt.subplots(1, 3, figsize=(18, 6))
 
-    # Primo pannello: immagine originale.
     axes[0].imshow(original_np)
-    axes[0].set_title("Immagine originale")
+    axes[0].set_title("Original Image")
 
-    # Secondo pannello: classi predette colorate.
     axes[1].imshow(colored_prediction)
-    axes[1].set_title("Classi predette EoMT")
+    axes[1].set_title("EoMT Predicted Classes")
     axes[1].legend(
         handles=legend_handles,
         loc="upper center",
@@ -610,56 +358,101 @@ def save_semantic_prediction_visualization(
         frameon=False,
     )
 
-    # Terzo pannello: probabilità della classe vincente, pixel per pixel.
     conf_plot = axes[2].imshow(confidence, cmap="viridis", vmin=0.0, vmax=1.0)
-    axes[2].set_title("Confidence classe predetta")
+    axes[2].set_title("Predicted Class Confidence")
     fig.colorbar(conf_plot, ax=axes[2], fraction=0.046, pad=0.04)
 
-    # Rimuovo gli assi per avere un output più pulito.
     for ax in axes:
         ax.axis("off")
 
-    # Creo la cartella di output se non esiste.
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-
-    # Salvo la visualizzazione su disco.
     plt.tight_layout()
     plt.savefig(output_path, bbox_inches="tight", dpi=200)
     plt.close(fig)
 
-    # Se richiesto, salvo anche il CSV con probabilità medie per regione.
-    if probability_csv_path is not None:
-        region_rows = summarize_predicted_regions(
-            prediction=prediction,
-            probabilities=probabilities,
-            min_region_pixels=min_region_pixels,
-            max_regions=max_regions,
-        )
-        save_region_probability_csv(region_rows, probability_csv_path)
-
-    # Ritorno i prodotti intermedi per eventuale uso programmatico.
-    return prediction, probabilities, confidence, pixel_logits
+    region_rows = summarize_predicted_regions(
+        prediction=prediction,
+        probabilities=probabilities,
+        min_region_pixels=min_region_pixels,
+        max_regions=max_regions,
+    )
+    save_region_probability_csv(region_rows, probability_csv_path)
 
 
-def build_output_paths(image_path, output_dir):
+def load_anomaly_ground_truth(image_path):
     '''
-    Costruisce i path di output standard per una immagine di input.
-
-    Per ogni immagine vengono creati nomi stabili basati sullo stem del file:
-    uno per RbA, uno per la predizione semantica e uno per il CSV delle probabilità.
+    Carica la ground truth anomaly corrispondente a una immagine.
     '''
-    # Uso lo stem del file per creare nomi leggibili e indipendenti dall'estensione.
-    image_stem = Path(image_path).stem
+    path_gt = create_pathGT(image_path)
+    mask = Image.open(path_gt)
+    mask = target_transform(mask)
+    return create_oodgts(mask, path_gt)
 
-    # Creo la cartella di output come `Path` per comporre i nomi in modo robusto.
-    output_dir = Path(output_dir)
 
-    # Ritorno tutti i path necessari allo script.
+def create_empty_metric_storage(score_keys):
+    '''
+    Crea la struttura dati usata per accumulare ground truth e score anomaly.
+    '''
     return {
-        "rba": output_dir / f"{image_stem}_rba.png",
+        "ood_gts": [],
+        "anomaly_scores": {k: [] for k in score_keys},
+    }
+
+
+def add_image_to_metric_storage(image_path, anomaly_score_maps, metric_storage):
+    '''
+    Aggiunge una immagine agli accumulatori delle metriche anomaly (con catch errori).
+    '''
+    try:
+        ood_gts = load_anomaly_ground_truth(image_path)
+    except FileNotFoundError:
+        print("  Metriche saltate: ground truth non trovata.")
+        return
+
+    if 1 not in np.unique(ood_gts):
+        print("  Metriche saltate: la ground truth non contiene anomalie.")
+        return
+
+    metric_storage["ood_gts"].append(ood_gts)
+
+    for score_name, score_map in anomaly_score_maps.items():
+        if score_name in metric_storage["anomaly_scores"]:
+            metric_storage["anomaly_scores"][score_name].append(score_map)
+
+
+def print_anomaly_metric_results(metric_storage):
+    '''
+    Calcola e stampa AUPRC e FPR@TPR95.
+    '''
+    if not metric_storage["ood_gts"]:
+        print("Metriche anomaly non calcolate: nessuna immagine valutabile con ground truth anomala.")
+        return
+
+    for score_name in metric_storage["anomaly_scores"].keys():
+        prc_auc, fpr = eval_score(
+            metric_storage["ood_gts"],
+            metric_storage["anomaly_scores"][score_name],
+        )
+        print(f"AUPRC {score_name} score: {prc_auc * 100.0:.2f}")
+        print(f"FPR@TPR95 {score_name}: {fpr * 100.0:.2f}")
+
+
+def build_output_paths(image_path, output_dir, score_keys):
+    '''
+    Costruisce i nomi dei file di output dinamici (allineato alla logica ERFNet).
+    '''
+    image_stem = Path(image_path).stem
+    output_dir = Path(output_dir)
+    
+    paths = {
         "prediction": output_dir / f"{image_stem}_prediction.png",
         "probabilities": output_dir / f"{image_stem}_predicted_regions_probabilities.csv",
     }
+    
+    for key in score_keys:
+        paths[key] = output_dir / f"{image_stem}_{key}.png"
+
+    return paths
 
 
 def visualize_single_image(
@@ -668,67 +461,87 @@ def visualize_single_image(
     device,
     output_dir="visualizations",
     mode="both",
+    anomaly_score="rba",
+    temperatures=None,
     min_region_pixels=500,
     max_regions=30,
 ):
     '''
-    Visualizza una singola immagine con RbA, predizione semantica o entrambe.
-
-    La funzione esegue una sola inferenza EoMT per immagine e riusa gli stessi
-    logits per tutte le visualizzazioni richieste, così il codice resta coerente
-    e non spreca memoria/tempo.
+    Esegue tutta la pipeline di visualizzazione per una singola immagine.
     '''
-    # Creo i path di output associati all'immagine.
-    output_paths = build_output_paths(image_path, output_dir)
+    original_image, pixel_logits = compute_pixel_logits_for_image(image_path, model, device)
 
-    # Eseguo una sola inferenza completa, inclusa la parte dei crop.
-    _, pixel_logits = compute_pixel_logits_for_image(image_path, model, device)
+    anomaly_score_maps = compute_anomaly_score_maps(pixel_logits, temperatures)
+    output_paths = build_output_paths(image_path, output_dir, anomaly_score_maps.keys())
+    prediction, probabilities, confidence = compute_semantic_prediction_and_probabilities(pixel_logits)
 
-    # Salvo la visualizzazione RbA quando richiesta.
-    if mode in ("rba", "both"):
-        save_rba_anomaly_visualization(
-            image_path=image_path,
-            model=model,
-            device=device,
-            output_path=output_paths["rba"],
-            pixel_logits=pixel_logits,
-        )
+    if mode in ("anomaly", "both"):
+        if anomaly_score == "all":
+            score_names = list(anomaly_score_maps.keys())
+        else:
+            score_names = [anomaly_score]
+            if temperatures:
+                score_names.extend([f"msp_T_{t}" for t in temperatures])
+        
+        score_names = list(dict.fromkeys(score_names))
+        
+        for score_name in score_names:
+            if score_name in anomaly_score_maps:
+                save_anomaly_visualization(
+                    image_path=image_path,
+                    output_path=output_paths[score_name],
+                    score_name=score_name,
+                    score_map=anomaly_score_maps[score_name],
+                    original_image=original_image,
+                )
 
-    # Salvo la visualizzazione semantica quando richiesta.
     if mode in ("prediction", "both"):
         save_semantic_prediction_visualization(
             image_path=image_path,
-            model=model,
-            device=device,
             output_path=output_paths["prediction"],
             probability_csv_path=output_paths["probabilities"],
+            original_image=original_image,
+            prediction=prediction,
+            probabilities=probabilities,
+            confidence=confidence,
             min_region_pixels=min_region_pixels,
             max_regions=max_regions,
-            pixel_logits=pixel_logits,
         )
 
-    # Calcolo le quattro mappe anomaly da usare per le metriche finali.
-    anomaly_score_maps = compute_anomaly_score_maps(pixel_logits)
-
-    # Libero memoria GPU dopo aver finito con l'immagine corrente.
-    del pixel_logits
+    del pixel_logits, prediction, probabilities, confidence
     if device == "cuda":
         torch.cuda.empty_cache()
 
-    # Ritorno path e anomaly score, cosi il main puo stampare file e metriche aggregate.
     return output_paths, anomaly_score_maps
+
+
+def expand_input_paths(input_patterns):
+    '''
+    Espande una lista di path o glob in una lista ordinata di immagini.
+    '''
+    image_paths = []
+
+    for input_pattern in input_patterns:
+        expanded = sorted(glob.glob(os.path.expanduser(str(input_pattern))))
+        if expanded:
+            image_paths.extend(expanded)
+        elif Path(input_pattern).exists():
+            image_paths.append(str(input_pattern))
+
+    return sorted(dict.fromkeys(image_paths))
 
 
 def main():
     '''
     Entry point da riga di comando per visualizzare immagini con EoMT.
-
-    Esempio:
-    `python evalAnomalyEoMTVisualize.py --input "datasets/.../images/*.jpg" --mode both`
     '''
-    # Definisco gli argomenti CLI mantenendo i default coerenti con `evalAnomalyEoMT.py`.
     parser = ArgumentParser()
-    parser.add_argument("--input", required=True, help="Path o glob delle immagini da visualizzare.")
+    parser.add_argument(
+        "--input", 
+        required=True, 
+        nargs="+", 
+        help="Path o glob delle immagini da visualizzare."
+    )
     parser.add_argument(
         "--output-dir",
         default="/content/drive/MyDrive/ml_anomaly_segmentation/visualizations",
@@ -746,9 +559,22 @@ def main():
     )
     parser.add_argument(
         "--mode",
-        choices=["rba", "prediction", "both"],
+        choices=["anomaly", "prediction", "both"],
         default="both",
         help="Tipo di visualizzazione da salvare.",
+    )
+    parser.add_argument(
+        "--anomaly-score",
+        choices=["logit", "softmax", "entropy", "rba", "all"],
+        default="rba",
+        help="Score anomaly da visualizzare quando mode e' anomaly/both.",
+    )
+    parser.add_argument(
+        "--temperatures",
+        type=float,
+        nargs="+",
+        default=None,
+        help="Lista di temperature per calcolare e stampare le relative mappe MSP.",
     )
     parser.add_argument(
         "--min-region-pixels",
@@ -766,28 +592,31 @@ def main():
         "--device",
         choices=["cpu", "cuda"],
         default="cpu",
-        help="Device da usare. Se omesso, usa CUDA quando disponibile.",
+        help="Device da usare. Se omesso, usa CPU.",
+    )
+    parser.add_argument(
+        "--skip-metrics",
+        action="store_true",
+        help="Non cerca le ground truth e non calcola AUPRC/FPR.",
     )
     args = parser.parse_args()
 
-    # Carico una sola volta il modello e i pesi `.bin`.
     model, device = load_eomt_for_visualization(
         config_path=args.config_path,
         state_dict_path=args.state_dict_path,
         device=args.device,
     )
 
-    # Espando il path input come glob, esattamente nello spirito degli script eval.
-    image_paths = sorted(glob.glob(os.path.expanduser(str(args.input))))
-
-    # Interrompo con un messaggio chiaro se il glob non trova immagini.
+    image_paths = expand_input_paths(args.input)
     if not image_paths:
         raise FileNotFoundError(f"Nessuna immagine trovata con input: {args.input}")
 
-    # Preparo gli accumulatori per calcolare le metriche anomaly alla fine del ciclo.
-    metric_storage = create_empty_metric_storage()
+    score_keys = ["logit", "softmax", "entropy", "rba"]
+    if args.temperatures:
+        score_keys.extend([f"msp_T_{t}" for t in args.temperatures])
 
-    # Processo una immagine alla volta per contenere la memoria GPU/CPU.
+    metric_storage = create_empty_metric_storage(score_keys)
+
     for image_path in image_paths:
         print(f"Visualizzo: {image_path}")
         output_paths, anomaly_score_maps = visualize_single_image(
@@ -796,27 +625,34 @@ def main():
             device=device,
             output_dir=args.output_dir,
             mode=args.mode,
+            anomaly_score=args.anomaly_score,
+            temperatures=args.temperatures,
             min_region_pixels=args.min_region_pixels,
             max_regions=args.max_regions,
         )
 
-        # Accumulo ground truth e score per calcolare AUPRC/FPR@TPR95 a fine ciclo.
-        add_image_to_metric_storage(
-            image_path=image_path,
-            anomaly_score_maps=anomaly_score_maps,
-            metric_storage=metric_storage,
-        )
+        if not args.skip_metrics:
+            add_image_to_metric_storage(
+                image_path=image_path,
+                anomaly_score_maps=anomaly_score_maps,
+                metric_storage=metric_storage,
+            )
 
-        # Stampo i file creati, così è facile trovarli da terminale.
-        if args.mode in ("rba", "both"):
-            print(f"  RbA salvato in: {output_paths['rba']}")
+        if args.mode in ("anomaly", "both"):
+            saved_scores = [args.anomaly_score] if args.anomaly_score != "all" else list(anomaly_score_maps.keys())
+            if args.temperatures and args.anomaly_score != "all":
+                saved_scores.extend([f"msp_T_{t}" for t in args.temperatures])
+            
+            for score_name in dict.fromkeys(saved_scores):
+                if score_name in output_paths:
+                    print(f"  {score_name} salvato in: {output_paths[score_name]}")
+
         if args.mode in ("prediction", "both"):
             print(f"  Predizione salvata in: {output_paths['prediction']}")
             print(f"  Probabilità regioni salvate in: {output_paths['probabilities']}")
 
-
-    # A fine ciclo stampo le metriche aggregate, oppure quelle della singola immagine.
-    print_anomaly_metric_results(metric_storage)
+    if not args.skip_metrics:
+        print_anomaly_metric_results(metric_storage)
 
 
 if __name__ == "__main__":
