@@ -35,10 +35,6 @@ def _default_run_root() -> Path:
     """
     Determina la cartella radice in cui salvare output e checkpoint.
 
-    Se il codice viene eseguito in Google Colab e il Drive risulta montato,
-    utilizza una directory dedicata all'interno di Drive. In caso contrario
-    usa una cartella locale nella directory corrente.
-
     Returns:
         Path della directory radice per run e checkpoint.
     """

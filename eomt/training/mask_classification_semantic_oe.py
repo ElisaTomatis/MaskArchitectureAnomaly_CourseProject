@@ -77,7 +77,6 @@ class MaskClassificationSemanticOE(MaskClassificationSemantic):
     ) -> None:
         """Inizializza la variante OE e, se richiesto, congela tutto tranne gli head."""
         kwargs.setdefault("lr_scheduler", "none")
-        # Costruiamo la classe base che contiene modello, loss e metriche.
         super().__init__(*args, **kwargs)
         self.lambda_rba = lambda_rba
         self.rba_alpha = rba_alpha
@@ -85,7 +84,6 @@ class MaskClassificationSemanticOE(MaskClassificationSemantic):
         self.freeze_heads_only = freeze_heads_only
 
         if freeze_heads_only:
-            # Applichiamo il freeze richiesto dal progetto.
             self.freeze_all_but_heads()
 
     def freeze_all_but_heads(self) -> None:
@@ -114,7 +112,6 @@ class MaskClassificationSemanticOE(MaskClassificationSemantic):
             raise RuntimeError("Nessun parametro trainable: controlla i nomi degli head.")
 
     def on_fit_start(self) -> None:
-        """Stampa un riepilogo dei parametri trainable quando parte il fit."""
 
         trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
         total = sum(p.numel() for p in self.parameters())
@@ -124,9 +121,6 @@ class MaskClassificationSemanticOE(MaskClassificationSemantic):
         """
         Cosa fa:
             Costruisce l'optimizer solo sui parametri non congelati.
-
-        Input:
-            Nessuno esplicito, usa gli attributi del modulo.
 
         Output:
             - un AdamW sui soli parametri trainable

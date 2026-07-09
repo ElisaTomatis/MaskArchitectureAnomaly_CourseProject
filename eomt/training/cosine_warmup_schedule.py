@@ -43,9 +43,6 @@ class CosineWarmupSchedule(LRScheduler):
         """
 
         if total_steps <= 0:
-            # Protezione per casi limite in cui Lightning non riesca a stimare
-            # gli step: almeno uno step evita divisioni per zero e mantiene il
-            # comportamento dello scheduler ben definito.
             total_steps = 1
         if not 0.0 <= warmup_ratio < 1.0:
             raise ValueError("warmup_ratio deve essere nel range [0.0, 1.0).")
@@ -65,14 +62,8 @@ class CosineWarmupSchedule(LRScheduler):
         step = min(max(0, self.last_epoch), self.total_steps)
 
         if self.warmup_steps > 0 and step < self.warmup_steps:
-            # Warmup lineare: partiamo da 0 e arriviamo al learning rate base al
-            # termine del warmup. Usiamo `step + 1` per evitare un primo update a
-            # learning rate esattamente nullo quando il warmup e' attivo.
             lr_scale = (step + 1) / self.warmup_steps
         else:
-            # Cosine decay: dopo il warmup, `progress` va da 0 a 1 sugli step
-            # rimanenti. La curva coseno parte da 1.0 e termina a 0.0; poi la
-            # riportiamo nel range [min_lr_ratio, 1.0].
             decay_steps = max(1, self.total_steps - self.warmup_steps)
             progress = (step - self.warmup_steps) / decay_steps
             progress = min(max(progress, 0.0), 1.0)

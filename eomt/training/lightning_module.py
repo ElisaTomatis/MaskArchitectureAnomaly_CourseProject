@@ -82,12 +82,8 @@ class LightningModule(lightning.LightningModule):
         self.weight_decay = weight_decay
         self.poly_power = poly_power
         self.warmup_steps = warmup_steps
-        # Seleziona lo scheduler da usare in configure_optimizers().
         self.lr_scheduler = lr_scheduler
-        # Percentuale degli step totali dedicata al warmup nel nuovo scheduler
         self.cosine_warmup_ratio = cosine_warmup_ratio
-        # Learning rate finale come frazione del learning rate iniziale nel
-        # cosine decay. 
         self.cosine_min_lr_ratio = cosine_min_lr_ratio
         self.llrd_l2_enabled = llrd_l2_enabled
 
@@ -182,15 +178,7 @@ class LightningModule(lightning.LightningModule):
         }
 
     def _build_lr_scheduler_config(self, optimizer, num_backbone_params: int = 0):
-        """Costruisce la configurazione Lightning dello scheduler.
-
-        La logica e' isolata in un helper per poterla riusare anche nelle
-        sottoclassi di fine tuning che ridefiniscono `configure_optimizers()`
-        (ad esempio la variante OE, che ottimizza solo i parametri non
-        congelati). Lo scheduler viene eseguito a ogni step dell'optimizer, non
-        a ogni epoca, cosi' il warmup del 10% e il cosine decay sono calcolati
-        sul numero reale di update stimato da Lightning.
-        """
+        """Costruisce la configurazione Lightning dello scheduler."""
 
         if self.lr_scheduler in (None, "none", "disabled", "off"):
             # Nessuno scheduler: Lightning riceverà solo l'optimizer.

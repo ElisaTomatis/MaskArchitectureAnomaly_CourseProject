@@ -16,15 +16,6 @@ from models.scale_block import ScaleBlock
 
 
 class EoMT(nn.Module):
-    """
-    Implementazione dell'Encoder-only Mask Transformer.
-
-    EoMT riutilizza un Vision Transformer come unico blocco principale del
-    modello: alle patch dell'immagine vengono aggiunte query di segmentazione,
-    e gli ultimi blocchi del ViT producono sia logits di classe sia maschere.
-    Il modello evita decoder specializzati e usa attention mask derivate dalle
-    predizioni intermedie per guidare le query.
-    """
     def __init__(
         self,
         encoder: nn.Module,
@@ -33,19 +24,6 @@ class EoMT(nn.Module):
         num_blocks=4,
         masked_attn_enabled=True,
     ):
-        """
-        Inizializza architettura, query e teste di predizione.
-
-        Args:
-            encoder: Encoder ViT con attributi `backbone`, `pixel_mean` e
-                `pixel_std`.
-            num_classes: Numero di classi del task, esclusa la classe no-object.
-            num_q: Numero di query di segmentazione.
-            num_blocks: Numero di blocchi finali del ViT in cui inserire e
-                aggiornare le query.
-            masked_attn_enabled: Abilita l'uso di attention mask generate dalle
-                predizioni intermedie.
-        """
         super().__init__()
         self.encoder = encoder
         self.num_q = num_q
@@ -75,17 +53,6 @@ class EoMT(nn.Module):
         )
 
     def _predict(self, x: torch.Tensor):
-        """
-        Calcola logits di classe e logits di maschera dalle query correnti.
-
-        Args:
-            x: Sequenza di token normalizzata contenente query, eventuali token
-                prefisso e patch token.
-
-        Returns:
-            Tupla `(mask_logits, class_logits)` con maschere per query e logits
-            di classificazione delle query.
-        """
         q = x[:, : self.num_q, :]
 
         class_logits = self.class_head(q)
@@ -103,20 +70,6 @@ class EoMT(nn.Module):
 
     @torch.compiler.disable
     def _disable_attn_mask(self, attn_mask, prob):
-        """
-        Disabilita stocasticamente parti della attention mask durante il training.
-
-        La probabilita controlla quante query mantengono la maschera attiva.
-        Questo supporta l'annealing delle attention mask, rendendo graduale il
-        passaggio da attenzione libera ad attenzione mascherata.
-
-        Args:
-            attn_mask: Maschera di attenzione booleana.
-            prob: Probabilita di mantenere la maschera per una query.
-
-        Returns:
-            Maschera di attenzione aggiornata.
-        """
         if prob < 1:
             random_queries = (
                 torch.rand(attn_mask.shape[0], self.num_q, device=attn_mask.device)
@@ -135,22 +88,6 @@ class EoMT(nn.Module):
         mask: Optional[torch.Tensor],
         rope: Optional[torch.Tensor],
     ):
-        """
-        Esegue il modulo di self-attention del blocco ViT con supporto a mask.
-
-        Gestisce sia backbone con RoPE sia attention standard `timm`. Quando
-        disponibile, usa `scaled_dot_product_attention`; altrimenti calcola
-        esplicitamente la matrice di attenzione.
-
-        Args:
-            module: Modulo attention del blocco ViT.
-            x: Token in input alla attention.
-            mask: Maschera opzionale di attenzione.
-            rope: Embedding RoPE opzionale.
-
-        Returns:
-            Token aggiornati dalla self-attention.
-        """
         if rope is not None:
             if mask is not None:
                 mask = mask[:, None, ...].expand(-1, module.num_heads, -1, -1)
@@ -182,22 +119,6 @@ class EoMT(nn.Module):
         return x
 
     def _attn_mask(self, x: torch.Tensor, mask_logits: torch.Tensor, i: int):
-        """
-        Costruisce la attention mask query-patch da una predizione di maschera.
-
-        Le maschere predette vengono interpolate alla griglia delle patch del
-        backbone. Una query puo prestare attenzione solo alle patch in cui la
-        sua maschera e positiva, salvo disattivazione stocastica controllata da
-        `attn_mask_probs`.
-
-        Args:
-            x: Sequenza corrente di token.
-            mask_logits: Logits di maschera predette dal livello corrente.
-            i: Indice del blocco ViT corrente.
-
-        Returns:
-            Maschera booleana da passare alla self-attention.
-        """
         attn_mask = torch.ones(
             x.shape[0],
             x.shape[1],
@@ -227,20 +148,6 @@ class EoMT(nn.Module):
         return attn_mask
 
     def forward(self, x: torch.Tensor):
-        """
-        Esegue il forward pass di EoMT.
-
-        Normalizza l'immagine, genera patch token con il backbone ViT, inserisce
-        le query negli ultimi blocchi e produce predizioni intermedie e finali
-        di maschere e classi.
-
-        Args:
-            x: Batch di immagini con shape `[B, 3, H, W]`.
-
-        Returns:
-            Tupla `(mask_logits_per_layer, class_logits_per_layer)` contenente
-            le predizioni generate nei blocchi finali e nell'output finale.
-        """
         x = (x - self.encoder.pixel_mean) / self.encoder.pixel_std
 
         rope = None

@@ -79,19 +79,6 @@ class CocoOODPaster:
             raise ValueError("Nessuna immagine COCO trovata per le categorie OOD.")
 
     def get_random_object(self, max_tries: int = 20) -> tuple[np.ndarray, np.ndarray, str]:
-        """
-        Cosa fa:
-            Sceglie casualmente un'istanza COCO valida e ne ritorna il crop.
-
-        Input:
-            - max_tries: massimo numero di tentativi prima di fallire
-
-        Output:
-            - obj_img: crop RGB dell'oggetto
-            - obj_mask: maschera binaria ritagliata
-            - cat_name: nome leggibile della categoria
-        """
-
         for _ in range(max_tries):
             # Scegliamo una immagine e una sua annotazione casuale.
             img_id = random.choice(self.img_ids)
@@ -134,18 +121,6 @@ class CocoOODPaster:
         obj_img: np.ndarray,
         obj_mask: np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """
-        Cosa fa:
-            Ridimensiona oggetto e mask mantenendo il rapporto tra i lati.
-
-        Input:
-            - obj_img: crop RGB dell'oggetto
-            - obj_mask: mask binaria dell'oggetto
-
-        Output:
-            - img: oggetto ridimensionato
-            - mask: mask ridimensionata con nearest neighbor
-        """
 
         h, w = obj_img.shape[:2]
         # Scegliamo una nuova altezza e manteniamo l'aspect ratio.
@@ -158,19 +133,6 @@ class CocoOODPaster:
         return np.asarray(img), np.asarray(mask)
 
     def paste(self, city_img: np.ndarray) -> tuple[np.ndarray, np.ndarray, str]:
-        """
-        Cosa fa:
-            Incolla un oggetto COCO dentro una immagine Cityscapes.
-
-        Input:
-            - city_img: immagine RGB come array numpy H x W x 3
-
-        Output:
-            - city_paste: immagine modificata con il paste
-            - ood_mask: maschera binaria H x W dei pixel anomali
-            - cat_name: nome della categoria incollata
-        """
-
         city_paste = city_img.copy()
         H, W = city_paste.shape[:2]
 
@@ -209,16 +171,6 @@ class CocoOODPaster:
 
 
 def _clone_target(target: dict) -> dict:
-    """
-    Cosa fa:
-        Duplica il dizionario target per evitare modifiche in-place.
-
-    Input:
-        - target: dizionario con maschere, label e flag vari
-
-    Output:
-        - cloned: copia superficiale con tensori clonati
-    """
 
     cloned = {}
     for key, value in target.items():
@@ -228,21 +180,6 @@ def _clone_target(target: dict) -> dict:
 
 
 class OODDatasetWrapper(torch.utils.data.Dataset):
-    """
-    Cosa fa:
-        Avvolge un dataset Cityscapes e, con probabilita' `p_ood`, inserisce un
-        oggetto COCO OOD nella sample, aggiungendo anche `target["ood_mask"]`.
-
-    Input:
-        - base_dataset: dataset Cityscapes gia' costruito
-        - paster: istanza di CocoOODPaster
-        - p_ood: probabilita' di applicare il paste OOD
-
-    Output:
-        - __len__(): stessa lunghezza del dataset base
-        - __getitem__(): coppia (img, target) eventualmente modificata
-    """
-
     def __init__(
         self,
         base_dataset: torch.utils.data.Dataset,
@@ -258,18 +195,6 @@ class OODDatasetWrapper(torch.utils.data.Dataset):
         return len(self.base_dataset)
 
     def __getitem__(self, idx: int):
-        """
-        Cosa fa:
-            Recupera una sample Cityscapes e, a volte, la trasforma in sample OOD.
-
-        Input:
-            - idx: indice della sample
-
-        Output:
-            - img: immagine originale o con oggetto COCO incollato
-            - target: dizionario con masks, labels, is_crowd e ood_mask
-        """
-
         img, target = self.base_dataset[idx]
         target = _clone_target(target)
 
@@ -354,10 +279,6 @@ class CityscapesSemanticOE(CityscapesSemantic):
         self.ood_target_height_range = ood_target_height_range
 
     def _resolve_coco_root(self) -> Path:
-        """
-        Risolve la cartella COCO da argomento esplicito o variabile d'ambiente.
-        """
-
         if self.coco_root is not None:
             return Path(self.coco_root)
 
@@ -371,17 +292,6 @@ class CityscapesSemanticOE(CityscapesSemantic):
         )
 
     def setup(self, stage=None):
-        """
-        Cosa fa:
-            Crea train/val dataset Cityscapes e wrappa il train set con OOD.
-
-        Input:
-            - stage: fase Lightning, usata per capire se stiamo facendo fit
-
-        Output:
-            - self con attributi `cityscapes_train_dataset` e `cityscapes_val_dataset`
-        """
-
         super().setup(stage)
 
         if stage in (None, "fit"):
